@@ -20,19 +20,14 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain import hub
 from sentence_transformers import CrossEncoder # For Reranking
 from openai import OpenAI # 요약 & reranker & GPT Scoring
-
 from langchain.prompts import PromptTemplate
+
 # --- langsmith  ---
 from langchain.callbacks.tracers.langchain import LangChainTracer
 from langchain.schema.messages import HumanMessage
 
 # --- upstage ----
 from langchain_upstage import UpstageGroundednessCheck
-
-
-# BASE_DIR = Path(__file__).resolve().parent            # 사람마다 현재 폴더 설정 달라질 수 있으니 그에 따라 .parent 몇개 붙일지 결정정
-# FAISS_DB_PATH = Path(BASE_DIR / "faiss_db") # 위에 꺼 맞춰서 faiss_db 경로도 변경
-# >>>>>>> ad148d2 (240416, 체크용 주피터 파일 생성 및 rag_app.py ragas추가 버전으로 변경)
 
 # --- Const and setting ---
 BASE_DIR = Path(__file__).resolve().parent.parent # cur directory
@@ -47,6 +42,10 @@ UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY")
 # LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT")
 # LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2")
 
+# --- Langsmith Setting ---
+PROJECT_NAME = "RAG-System"
+TRACER = LangChainTracer(project_name=PROJECT_NAME)
+
 # --- Model Definitions ---
 AVAILABLE_EMBEDDINGS = {
     "bge-m3": "BAAI/bge-m3",
@@ -60,29 +59,30 @@ DEFAULT_RERANKER_METHOD = "bge"
 DEFAULT_RETRIEVER_K = 8
 DEFAULT_RERANKER_TOP_K = 4
 DEFAULT_LLM_MODEL_NAME = "gpt-3.5-turbo"
-DEFAULT_GPT_SCORING_MODEL = "gpt-4"
+DEFAULT_GPT_SCORING_MODEL = "gpt-4o" # "gpt-4"
 
 # Document Formatting
-# Document에서 내용만 뽑아서 str형태로 변환하는 함수 -> LLM 부를 때 이용
+# document에서 내용만 뽑아서 str형태로 변환하는 함수 -> LLM 부를 때 이용
 def format_docs(docs: List[Document]) -> str:
     return "\n\n".join(doc.page_content for doc in docs)
 
 
-########################## RERANK function ###############################
-
+########################## RERANK functions ###############################
 # GPT Document Summarization (Optional, used in summarize_and_rerank)
-# API 비용 발생
+# GPT를 이용한 retrive 문서 512토큰 이하 요약 함수. API 비용 발생(optional, gpt-3.5 쓰도록 고정)
+# Use Langsmith for trace
 def gpt_summarize_document(doc: Document, max_tokens=512, api_key=None) -> Document:
     if not api_key:
         raise ValueError("OpenAI API key is required for summarization.")
-    client = OpenAI(api_key=api_key)
-    prompt = f"""다음 문서를 {max_tokens}자 이내로 요약해 주세요.\n\n문서:\n{doc.page_content}"""
+    
+    # Use LangChain wrapper?
+    llm = ChatOpenAI(model="gpt-3.5-turbo", max_tokens=max_tokens, openai_api_key=api_key, callbacks=[TRACER])
+    prompt = f"""다음 문서를 {max_tokens}토큰 이하로 요약해 주세요.\n\n문서:\n{doc.page_content}"""
+    
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", # 일단 싼걸로 고정
-            messages=[{"role": "user", "content": prompt}]
-        )
-        summary = response.choices[0].message.content.strip()
+        # Use LangChain method
+        response = llm.invoke([HumanMessage(content=prompt)])
+        summary = response.content.strip()
 
         # Store original text in metadata
         new_metadata = doc.metadata.copy()
@@ -94,13 +94,10 @@ def gpt_summarize_document(doc: Document, max_tokens=512, api_key=None) -> Docum
         # Return original document if fail
         return doc
 
-# Reranking Logic
-@st.cache_resource(show_spinner=False) # Cache the reranker model loading
+#입력 받은 reranker model 반환 함수
 #rerank모델 받아오는 걸 한번만 하고 그 뒤엔 캐시에 저장된걸로 이용
-
-# Just use CPU
+@st.cache_resource(show_spinner=False) 
 def get_reranker_model(method: str):
-    # 입력 받은 reranker model 반환 함수
     method = method.lower()
     st.write(f"Reranker 모델 로딩 중: {method}...") # Indicate loading
     if method == "ko-rerank":
@@ -119,7 +116,7 @@ def rerank_documents(
     docs: List[Document],
     method: str,
     top_k: int = 3,
-    openai_api_key: str = None # 어쩌지
+    openai_api_key: str = None
 ) -> List[Tuple[Document, float]]:
 
     if method not in AVAILABLE_RERANKERS:
@@ -144,10 +141,10 @@ def rerank_documents(
 def summarize_and_rerank(
     query: str,
     docs: List[Document],
-    summarize_first: bool = False, # Controls summarization *before* reranking (OpenAI API 비용 발생)
+    summarize_first: bool = False, # Controls summarization *before* reranking
     method: str = "bge",
     top_k: int = 3,
-    openai_api_key: str = None
+    openai_api_key: str = None 
 ) -> List[Document]:
 
     docs_to_rerank = docs
@@ -157,9 +154,9 @@ def summarize_and_rerank(
         else:
             st.write("문서 요약 중 (Reranking 전)...")
             with st.spinner("요약 진행 중..."):
-                 docs_to_rerank = [
-                     gpt_summarize_document(doc, max_tokens=512, api_key=openai_api_key) for doc in docs
-                 ]
+                docs_to_rerank = [
+                    gpt_summarize_document(doc, max_tokens=512, api_key=openai_api_key) for doc in docs
+                ]
 
     # Perform reranking
     reranked_with_scores = rerank_documents(
@@ -167,7 +164,7 @@ def summarize_and_rerank(
         docs=docs_to_rerank,
         method=method,
         top_k=top_k,
-        openai_api_key=openai_api_key # Pass key even if not used by current rerankers
+        openai_api_key=openai_api_key
     )
 
     final_original_docs = []
@@ -186,13 +183,15 @@ def summarize_and_rerank(
     return final_original_docs
 
 
-########################## Vector DB function ###############################
+########  Vector DB function  #########
 
-# --- Vector Store Loading ---
-# 함수 내에서 모델 이름 파생
-@st.cache_resource(show_spinner="벡터 DB 로딩 중...") # Cache the loaded vector store
+# Cache the loaded vector store
+# 임베딩 모델 선택하고 모델에 따른 DB 불러오기 -> openai 임베딩 모델 불러오는건 추적 안됨
+@st.cache_resource(show_spinner="벡터 DB 로딩 중...") #DB 받아오는 걸 한번만 하고 그 뒤엔 캐시에 저장된걸로 이용
 def load_vector_store(faiss_alias, api_key):
+
     # Call embedding models
+    ##### 임베딩 모델 불러오는 파트 #####
     if faiss_alias not in AVAILABLE_EMBEDDINGS:
         st.error(f"지원하지 않는 임베딩 모델 별칭입니다: {faiss_alias}")
         return None
@@ -210,7 +209,6 @@ def load_vector_store(faiss_alias, api_key):
     else:
         # 로컬 모델 사용
         try:
-            # if GPU is available and desired
             # device = "cpu"
             device = "cpu" # device = "cuda" if torch.cuda.is_available()
             embedding_model = HuggingFaceEmbeddings(
@@ -222,6 +220,8 @@ def load_vector_store(faiss_alias, api_key):
             st.error(f"HuggingFace 임베딩 모델 로딩 실패 ({model_name}): {e}")
             st.error("필요한 라이브러리가 설치되었는지 확인하세요: pip install sentence-transformers torch")
             return None
+
+    ##### local에 저장된 벡터 DB 불러오는 파트 #####
 
     # full path to the FAISS index directory
     db_path = FAISS_DB_PATH / faiss_alias
@@ -246,7 +246,18 @@ def load_vector_store(faiss_alias, api_key):
         st.error(f"FAISS 벡터 DB 로드 중 오류 발생 ({faiss_alias}): {e}")
         return None
 
-# OpenAI API 비용 발생
+
+
+###########  Factchecker function  ##########
+
+# Upstage Fact checker에 넘길 라벨
+label_to_score={
+    "grounded":1.0,
+    "notSure":0.5,
+    "notGrounded":0.0
+}
+
+# Rewrite User query -> Use "gpt-3.5-turbo"
 def rewrite_question_single(original_question: str, temperature: float = 0.3, api_key=None) -> str:
     # If api_key isn't available 
     if not api_key:
@@ -261,7 +272,7 @@ def rewrite_question_single(original_question: str, temperature: float = 0.3, ap
     원래 질문: "{original_question}"
 """
     prompt = PromptTemplate.from_template(prompt_template)
-    llm = ChatOpenAI(temperature=temperature, openai_api_key=api_key) # Pass API key
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=temperature, openai_api_key=api_key, callbacks=[TRACER]) # Pass API key
     chain = prompt | llm
 
     try:
@@ -273,7 +284,7 @@ def rewrite_question_single(original_question: str, temperature: float = 0.3, ap
         st.error(f"질문 재작성 중 오류 발생: {e}")
         return original_question # If error, return original
 
-# Sentence_split
+# 문서에서 원하는 내용 파싱하는 함수
 def sentence_split(text):
     # If text is a string?
     if not isinstance(text, str):
@@ -282,14 +293,7 @@ def sentence_split(text):
     # Filter out empty strings that might result from splitting
     return [s for s in split_sentence if s]
 
-# --- Fact Checker ---
-label_to_score={
-    "grounded":1.0,
-    "notSure":0.5,
-    "notGrounded":0.0
-}
-
-# Upstage API
+# Upstage Fact checker function -> Use UpStage API 
 def fact_checker(sentences: List[str], retrieved_docs: List[Document], api_key: str) -> Tuple[float, List[float]]:
     # If api_key isn't available 
     if not api_key:
@@ -341,92 +345,115 @@ def fact_checker(sentences: List[str], retrieved_docs: List[Document], api_key: 
     average_score = sum(results) / len(results)
     return average_score, results
 
-# --- GPT scoring ---
-def get_gpt_score(query: str, llm_response: str, retrieved_context: str, api_key: str) -> Dict[str, Any]:
-        # If api_key isn't available 
+
+
+#################   GPT scoring  #################
+
+# LLM이 스코어 답변한 내용에서 값 parsing하는 함수
+def parse_rag_eval_scores(text: str) -> Dict[str, int]:
+    """
+    평가 항목별 점수를 모두 딕셔너리로 반환 (스코어 신뢰성 포함)
+    출력: {'Answer Relevancy': 4, ..., '스코어 신뢰성': 2}
+    """
+    pattern = r"([가-힣A-Za-z\s]+):\s*([1-5])"
+    matches = re.findall(pattern, text)
+
+    return {label.strip(): int(score) for label, score in matches}
+
+#GPT를 이용한 LLM as judge 함수  ->  평가셋 가져오는 부분 미구현
+#출력 : [key : value]의 list. key는 평가셋
+def get_gpt_score(query: str, response: str, context: str, ground_truth: str, api_key: str) -> Dict[str, Any]:
+    # If api_key isn't available 
     if not api_key:
         st.error("GPT Scoring을 위해서는 OpenAI API 키가 필요합니다.")
         return {"Error": "OpenAI API Key not provided"}
 
     # Semantic Similarity는 Ground Truth 없이는 계산 불가 그래서 일단 빼고 구현
-    # 누군가가 평가셋 인식해서 가져오는 것까지 구현해줘..
-    scoring_prompt_template = """
-    당신은 RAG 시스템의 응답을 평가하는 전문가입니다. 아래의 항목별로 LLM 응답을 평가하고, 각 항목에 대해 **1점(매우 낮음) ~ 5점(매우 높음)** 사이의 점수를 부여하세요.
-    ---
+    eval_llm = ChatOpenAI(
+    model_name="gpt-4o",
+    temperature=0,
+    openai_api_key=api_key,
+    callbacks=[TRACER]
+    )
+
+    ground_truth = "기본 답변입니다. 이 부분에 대한 평가는 진행 X"
+    # 사용자 정의 프롬프트
+    user_prompt_template = """
     [질문]
     {query}
 
     [LLM의 응답]
     {llm_response}
 
+    [정답 (Ground Truth)]
+    {ground_truth}
+
     [참조 문서 (Retrieved Context)]
     {retrieved_context}
+
+    당신은 농산물 RAG 시스템의 응답을 평가하는 전문가입니다. 아래의 항목별로 LLM 응답을 평가하고, 각 항목에 대해 **1점(매우 낮음) ~ 5점(매우 높음)** 사이의 점수를 부여하세요. 
+
     ---
+
     ### 평가 항목
 
-    1. **Answer Relevancy**: 질문에서 묻는 핵심적인 요소에 대해 답변하였는지 평가하세요. 질문과 동떨어진 내용은 아닌지 확인하세요.
-    2. **Faithfulness**: 응답이 RAG가 검색한 문서(retrieved_context)의 내용만을 기반으로 작성되었는지 평가하세요. 검색된 문서 내용과 상반되거나 문서에 없는 내용을 LLM이 임의로 생성했을 경우 낮은 점수를 부여하세요.
-    3. **Intent Understanding**: 사용자의 질문 의도를 정확히 파악했는지 평가하세요. (예: 단순히 병명을 묻는 것인지, 해결책까지 원하는 것인지 등 질문의 깊이를 파악했는지)
-       점수 기준 예시:  
-        - **5점 (우수)**: 질문에 대해 올바르게 답하고, 사용자의 의도를 파악하여 추가 정보나 질문을 제시함  
-            - 예: 질문 '상추의 잎이 시들어요'에 대해 병명을 제시하고, 방제법도 함께 안내  
-        - **3점 (보통)**: 질문에 대해 올바르게 답했으나, 의도에 대한 확장 응답은 없음  
-            - 예: 질문 '상추의 잎이 시들어요'에 대해 병명만 제시  
-        - **1점 (미흡)**: 질문에 부적절한 응답을 하거나, 질문 자체를 오해함  
-            - 예: 질문 '상추의 잎이 시륻어요' (오탈자 포함)를 인식하지 못하거나 엉뚱한 답변
-    ---
+    1. **Answer Relevancy**  
+    질문에서 묻는 모든 요소에 대해 답변하였는지 평가하세요.
+    2. **Faithfulness**  
+    응답이 RAG가 검색한 문서(retrieved_context)의 내용만을 기반으로 작성되었는지 평가하세요.  
+    *문서에 없는 내용을 LLM이 임의로 생성했을 경우 낮은 점수*
+    3. **Intent Understanding**  
+    사용자의 질문 의도를 정확히 파악했는지 평가하세요.  
+    점수 기준 예시:  
+    - **5점 (우수)**: 질문에 대해 올바르게 답하고, 사용자의 의도를 파악하여 추가 정보나 질문을 제시함  
+        - 예: '상추의 잎이 시들어요'에 대해 병명을 제시하고, 방제법도 함께 안내  
+    - **3점 (보통)**: 질문에 대해 올바르게 답했으나, 의도에 대한 확장 응답은 없음  
+        - 예: '상추의 잎이 시들어요'에 대해 병명만 제시  
+    - **1점 (미흡)**: 질문에 부적절한 응답을 하거나, 질문 자체를 오해함  
+        - 예: '상추의 잎이 시륻어요' (오탈자 포함)를 인식하지 못하거나 엉뚱한 답변
+    4. **Semantic Similarity**  
+    Ground Truth와 LLM 응답이 내용 및 맥락적으로 유사한지 평가하세요.  
+    *답변이 의미는 같으나 표현만 다를 경우는 높은 점수, 전혀 다른 논지일 경우 낮은 점수*
+   
+    가능한 한 **객관적**으로 평가해 주세요. 또한, 추가적으로 평가한 **스코어 신뢰성**에 대해서도 출력해주세요
     ### 출력 형식
-    아래 형식에 맞춰 **숫자만** 한 줄씩 출력하세요. 다른 설명 없이 아래 형식만 출력해야 합니다.
 
-    Answer Relevancy: [점수]
-    Faithfulness: [점수]
-    Intent Understanding: [점수]
+    아래 형식에 맞춰 **숫자만** 한 줄씩 출력하세요.  
+    **다른 설명 없이 아래 형식만 출력해야 합니다.**
+
+    예시 출력:
+    Answer Relevancy: 4
+    Faithfulness: 5
+    Intent Understanding: 3
+    Semantic Similarity: 4
+    스코어 신뢰성 : 2
     """
-    prompt = scoring_prompt_template.format(
+
+    custom_prompt = user_prompt_template.format(
         query=query,
-        llm_response=llm_response,
-        retrieved_context=retrieved_context
+        llm_response=response,
+        ground_truth=ground_truth,
+        retrieved_context = context   #문서 여러개 한번에 넣을 수 있는지 체크
     )
+
     st.write(f"GPT 자동 평가 실행 중... ({DEFAULT_GPT_SCORING_MODEL})")
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=DEFAULT_GPT_SCORING_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=100 # Should be enough for scores, maybe
-        )
-        reply = response.choices[0].message.content.strip()
+        llm_judge_response = eval_llm.invoke([HumanMessage(content=custom_prompt)])
+        score_dict = parse_rag_eval_scores(llm_judge_response.content)
 
-        # Parse the scores
-        scores = {}
-        expected_keys = ["Answer Relevancy", "Faithfulness", "Intent Understanding"]
-        parsed_keys = set()
-
-        for line in reply.split('\n'):
-            if ':' in line:
-                key, value = line.split(':', 1)
-                key_strip = key.strip()
-                try:
-                     # Only parse expected keys
-                     if key_strip in expected_keys:
-                         scores[key_strip] = int(value.strip())
-                         parsed_keys.add(key_strip)
-                except ValueError:
-                     scores[key_strip] = f"Error parsing value: '{value.strip()}'" # Handle parsing errors
-
-        # Check if all expected keys were parsed
-        missing_keys = set(expected_keys) - parsed_keys
-        for k in missing_keys:
-             scores[k] = "Not found in response"
-
-        return scores
+        return score_dict  #신뢰성 포함된 전체 점수 딕셔너리
 
     except Exception as e:
         st.error(f"GPT Scoring 중 오류 발생: {e}")
         return {"Error": str(e)}
 
-# --- 파이프라인 함수 ---
+
+
+##########################   LLM 답변 생성까지의 Pipeline function  ###############################
+
+# 파이프라인 함수 : RAG 실행 및 LLM 답변 생성하는 것 까지 담당 -> streamlit UI에서 LLM 모델 선택하는 부분이 반영되는 곳
+# OpenAPI API 사용
+# Langsmith 추적
 def run_rag_pipeline(
     question: str,
     vectorstore: FAISS,
@@ -434,7 +461,7 @@ def run_rag_pipeline(
     use_reranker: bool,
     reranker_method: str,
     reranker_top_k: int,
-    summarize_before_rerank: bool, # True, OpenAI API 사용
+    summarize_before_rerank: bool, # If true, use OpenAI API
     llm_model_name: str, # OpenAI 모델 사용 시 비용 발생
     openai_api_key: str,
     run_id: str = "" # 로깅을 위한 실행 식별자(optional)
@@ -482,19 +509,20 @@ def run_rag_pipeline(
     st.write(f"{log_prefix}3. AI 답변 생성 중 ({llm_model_name})... ")
     context = format_docs(final_docs)
 
-    # Load RAG prompt
+    #################################################################
+    # RAG 포맷을 불러오는 함수 -> 이후 Cot + fewshot 실험에서 수정해야하는 부분
     try:
         prompt_hub = hub.pull("rlm/rag-prompt") # Standard RAG prompt
     except Exception as e:
         st.error(f"Langchain Hub에서 프롬프트를 가져오는 데 실패했습니다: {e}")
         # Fallback to a basic prompt
         prompt_hub = PromptTemplate.from_template(
-             "Question: {question}\n\nContext: {context}\n\nAnswer:"
+             "질문: {question}\n\n문서: {context}\n\nAnswer:"
         )
-
+    #################################################################
 
     # Define LLM
-    llm = ChatOpenAI(model_name=llm_model_name, temperature=0, openai_api_key=openai_api_key)
+    llm = ChatOpenAI(model_name=llm_model_name, temperature=0, openai_api_key=openai_api_key, callbacks=[TRACER])
 
     # Define the RAG chain using the reranked context
     rag_chain = (
@@ -503,7 +531,7 @@ def run_rag_pipeline(
         | prompt_hub
         | llm
         | StrOutputParser()
-    )
+    ).with_config({"callbacks": [TRACER]})# For callback tracing
 
     # Invoke the chain with the original question
     try:
@@ -514,13 +542,9 @@ def run_rag_pipeline(
         st.error(f"{log_prefix}   LLM 호출 중 오류 발생: {e}")
         return f"오류: 답변 생성 중 문제가 발생했습니다 ({e})", final_docs
 
-
 # --- Streamlit App UI ---
 st.set_page_config(page_title="RAG 시스템 (농산물 QA)", layout="wide")
 st.title("RAG 기반 농산물 질의응답 시스템")
-
-
-
 
 # --- Sidebar for SEtting ---
 st.sidebar.title("RAG 설정")
@@ -579,15 +603,10 @@ use_gpt_scoring_toggle = st.sidebar.checkbox(
     help=f"생성된 답변에 대해 ({DEFAULT_GPT_SCORING_MODEL})를 사용하여 관련성, 충실도 등을 평가. API 비용이 발생."
 )
 
-
-
-
-
-
+####################     메인 코드     ######################
 # --------- Main Area ---------
 st.caption(f"현재 설정 | Embedding: {selected_embedding_alias} | Reranker: {'사용 안 함' if not use_reranker_default else selected_reranker_method_default} | LLM: {selected_llm}")
 st.caption(f"부가 기능 | 요약: {'활성' if summarize_before_rerank_toggle else '비활성'} | FactCheck: {'활성' if use_fact_checker_toggle else '비활성'} | GPT 평가: {'활성' if use_gpt_scoring_toggle else '비활성'}")
-
 
 # Load the primary vector store based on sidebar selection
 # Cache the vector store based on the selected alias
@@ -679,7 +698,7 @@ if vectorstore:
             if use_gpt_scoring_toggle and final_docs_used:
                 with st.spinner(f"5. GPT Scoring 중... ({DEFAULT_GPT_SCORING_MODEL})"):
                      context_str_for_scoring = format_docs(final_docs_used)
-                     gpt_scores = get_gpt_score(question, final_response, context_str_for_scoring, OPENAI_API_KEY)
+                     gpt_scores = get_gpt_score(question, final_response, context_str_for_scoring,"예시시", OPENAI_API_KEY)
                      st.markdown("### GPT 평가 점수:")
                      st.json(gpt_scores) # Display scores as JSON
 
@@ -697,13 +716,6 @@ if vectorstore:
             st.error(f"단일 실행 처리 중 오류 발생: {e}")
             import traceback
             st.error(traceback.format_exc()) # Show detailed traceback for debugging
-
-
-
-
-
-
-
 
 
     # --- Multi-Model Evaluation Section ---
@@ -803,7 +815,9 @@ if vectorstore:
                          if use_gpt_scoring_toggle and eval_docs_used:
                              with st.spinner(f"[{run_id}] GPT Scoring 중... (OpenAI API)"):
                                  context_str = format_docs(eval_docs_used)
-                                 gpt_scores = get_gpt_score(question, eval_response, context_str, OPENAI_API_KEY)
+                                 
+                                 gpt_scores = get_gpt_score(question, eval_response, context_str,"예시시", OPENAI_API_KEY)
+
 
                          evaluation_results.append({
                              "Embedding": emb_alias,
