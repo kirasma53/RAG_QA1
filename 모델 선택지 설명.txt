@@ -1,0 +1,13 @@
+Embbeding :
+local로 저장해둔 embbeding model 종류 및 특징
+    - "openai"         → OpenAI text-embedding-3-large (open api 최신 모델)
+    - "bge-m3"         → BAAI/bge-m3 (최신 multilingual)
+    - "e5e"             → intfloat/e5-large-v2 (긴 문장 다국어)
+    - "gte"        → GTE (General Text Embedding) 계열 경량화 버전
+
+
+Reranker :  gp3.5 trubo로 512 token 이하로 요약한 후,
+"ko-rerank" : 한국어 기반, BERT rerank model
+"gpt"       : gpt 4
+"bge"       : BERT + 다른거
+"mini"      : BERT 기반이긴 하나, 영어로만 학습
