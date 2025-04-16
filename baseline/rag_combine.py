@@ -23,6 +23,9 @@ from sentence_transformers import CrossEncoder # For Reranking
 from openai import OpenAI # 요약 & reranker & GPT Scoring
 from langchain.prompts import PromptTemplate
 
+#--- User Query Prompt ---
+from query_prompt import build_user_query_prompt_chain, stream_final_answer_only
+
 # --- langsmith  ---
 from langchain.callbacks.tracers.langchain import LangChainTracer
 from langchain.schema.messages import HumanMessage
@@ -495,17 +498,29 @@ def run_rag_pipeline(
 
     # 3. Generate (LLM 호출)
     st.write(f"{log_prefix}3. AI 답변 생성 중 ({llm_model_name})... ")
-    context = format_docs(final_docs)
 
     #################################################################
-    # RAG 포맷을 불러오는 함수 -> 이후 Cot + fewshot 실험에서 수정해야하는 부분
+    # Few-shot-CoT 기반 프롬프트 체인 사용
     try:
-        prompt_hub = hub.pull("rlm/rag-prompt") # Standard RAG prompt
+        context = format_docs(final_docs)
+        full_question = f"{question}\n\n참고 문서:\n{context}"
+
+        cot_chain = build_user_query_prompt_chain()
+        result = cot_chain.invoke({"question": full_question})
+
+        # content 필드만 추출 (불필요한 메타데이터 제거)
+        if isinstance(result, dict) and "content" in result:
+            content = result["content"]
+        elif hasattr(result, "content"):
+            content = result.content
+        else:
+            content = str(result)
+
+        return content, final_docs
+
     except Exception as e:
-        st.error(f"Langchain Hub에서 프롬프트를 가져오는 데 실패했습니다: {e}")
-        prompt_hub = PromptTemplate.from_template(
-             "질문: {question}\n\n문서: {context}\n\nAnswer:"
-        )
+        st.error(f"{log_prefix}   LLM 호출 중 오류 발생: {e}")
+        return f"오류: 답변 생성 중 문제가 발생했습니다 ({e})", final_docs
     #################################################################
 
     # Define LLM
@@ -734,6 +749,22 @@ if vectorstore:
             if use_gpt_scoring_toggle: cost_flags.append("OpenAI Scoring")
             if cost_flags:
                  st.info(f"API 비용 발생 가능: {', '.join(cost_flags)}")
+            
+            
+            # 실험용 CoT 출력
+            query_chain = build_user_query_prompt_chain()
+            streamed = stream_final_answer_only(query_chain, question)
+
+            st.markdown("### 🌱 프롬프트 기반 GPT 응답:")
+
+            response_placeholder = st.empty()  # 빈 공간 하나 만들고
+            response_text = ""
+ 
+            for token in streamed:
+                response_text += token
+                response_placeholder.markdown(response_text)
+            # ------------------------------------------------
+
 
             with st.spinner("RAG 파이프라인 실행 중..."):
                 final_response, final_docs_used = run_rag_pipeline(
