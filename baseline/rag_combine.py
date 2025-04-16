@@ -1,14 +1,15 @@
 # pip install streamlit python-dotenv langchain langchain-openai langchain-community sentence-transformers faiss-cpu langchain-upstage openai==1.* 
 # Make sure openai version is >= 1.0
-
 # -*- coding: utf-8 -*-
 import os
 import re
 import streamlit as st
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 import itertools # 모델 조합 생성용
+import json # 평가셋 파일 로딩용
+import numpy as np # 평균 계산용
 
 # --- Langchain & AI Model Imports ---
 from langchain_community.vectorstores import FAISS
@@ -69,16 +70,15 @@ def format_docs(docs: List[Document]) -> str:
 
 ########################## RERANK functions ###############################
 # GPT Document Summarization (Optional, used in summarize_and_rerank)
-# GPT를 이용한 retrive 문서 512토큰 이하 요약 함수. API 비용 발생(optional, gpt-3.5 쓰도록 고정)
+# GPT를 이용한 retrive 문서 512토큰 이하 요약 함수. API 비용 발생(Optional, gpt-3.5 쓰도록 고정)
 # Use Langsmith for trace
 def gpt_summarize_document(doc: Document, max_tokens=512, api_key=None) -> Document:
     if not api_key:
         raise ValueError("OpenAI API key is required for summarization.")
-    
     # Use LangChain wrapper?
     llm = ChatOpenAI(model="gpt-3.5-turbo", max_tokens=max_tokens, openai_api_key=api_key, callbacks=[TRACER])
     prompt = f"""다음 문서를 {max_tokens}토큰 이하로 요약해 주세요.\n\n문서:\n{doc.page_content}"""
-    
+
     try:
         # Use LangChain method
         response = llm.invoke([HumanMessage(content=prompt)])
@@ -88,7 +88,6 @@ def gpt_summarize_document(doc: Document, max_tokens=512, api_key=None) -> Docum
         new_metadata = doc.metadata.copy()
         new_metadata["original_text"] = doc.page_content
         return Document(page_content=summary, metadata=new_metadata)
-
     except Exception as e:
         st.error(f"문서 요약 중 오류 발생: {e}")
         # Return original document if fail
@@ -99,14 +98,14 @@ def gpt_summarize_document(doc: Document, max_tokens=512, api_key=None) -> Docum
 @st.cache_resource(show_spinner=False) 
 def get_reranker_model(method: str):
     method = method.lower()
-    st.write(f"Reranker 모델 로딩 중: {method}...") # Indicate loading
+    st.write(f"Reranker 모델 로딩 중: {method}...")
     if method == "ko-rerank":
         return CrossEncoder("Dongjin-kr/ko-reranker", device='cpu', max_length=512)
     elif method == "bge":
         return CrossEncoder("BAAI/bge-reranker-base", device='cpu', max_length=512)
     elif method == "mini":
         return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device='cpu', max_length=512)
-    # gpt reranker 일단 제거
+    # gpt reranker 임시 제거
     else:
         raise ValueError(f"지원하지 않는 reranker method입니다: {method}")
 
@@ -116,7 +115,7 @@ def rerank_documents(
     docs: List[Document],
     method: str,
     top_k: int = 3,
-    openai_api_key: str = None
+    openai_api_key: str = None # For future GPT reranker
 ) -> List[Tuple[Document, float]]:
 
     if method not in AVAILABLE_RERANKERS:
@@ -141,16 +140,16 @@ def rerank_documents(
 def summarize_and_rerank(
     query: str,
     docs: List[Document],
-    summarize_first: bool = False, # Controls summarization *before* reranking
+    summarize_first: bool = False, # Controls summarization
     method: str = "bge",
     top_k: int = 3,
-    openai_api_key: str = None 
+    openai_api_key: str = None
 ) -> List[Document]:
 
     docs_to_rerank = docs
     if summarize_first:
         if not openai_api_key:
-             st.warning("문서 요약을 위해서는 OpenAI API 키가 필요합니다. 요약을 건너<0xEB><0>뜁니다.")
+             st.warning("문서 요약을 위해서는 OpenAI API 키가 필요합니다. 요약을 건너뜁니다.")
         else:
             st.write("문서 요약 중 (Reranking 전)...")
             with st.spinner("요약 진행 중..."):
@@ -164,7 +163,7 @@ def summarize_and_rerank(
         docs=docs_to_rerank,
         method=method,
         top_k=top_k,
-        openai_api_key=openai_api_key
+        openai_api_key=openai_api_key # For future
     )
 
     final_original_docs = []
@@ -178,10 +177,8 @@ def summarize_and_rerank(
 
         # Display reranked doc info (optional)
         st.write(f"  - Rank {i+1} (Score: {score:.4f}): ", final_doc.metadata.get('file_name', 'N/A'), f" (Index: {final_doc.metadata.get('index', 'N/A')})")
-        # st.write(f"    Content: {final_doc.page_content[:200]}...") # Uncomment to show content snippet
 
     return final_original_docs
-
 
 ########  Vector DB function  #########
 
@@ -247,7 +244,6 @@ def load_vector_store(faiss_alias, api_key):
         return None
 
 
-
 ###########  Factchecker function  ##########
 
 # Upstage Fact checker에 넘길 라벨
@@ -259,7 +255,6 @@ label_to_score={
 
 # Rewrite User query -> Use "gpt-3.5-turbo"
 def rewrite_question_single(original_question: str, temperature: float = 0.3, api_key=None) -> str:
-    # If api_key isn't available 
     if not api_key:
         st.error("질문 재작성을 위해서는 OpenAI API 키가 필요합니다.")
         return original_question # Return original if key is missing
@@ -270,15 +265,13 @@ def rewrite_question_single(original_question: str, temperature: float = 0.3, ap
     단, 원래 질문에 있던 작물은 똑같이 유지해주세요.
     한 가지 형태로만 변환해 주세요.
     원래 질문: "{original_question}"
-"""
+    """
     prompt = PromptTemplate.from_template(prompt_template)
-    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=temperature, openai_api_key=api_key, callbacks=[TRACER]) # Pass API key
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=temperature, openai_api_key=api_key, callbacks=[TRACER])
     chain = prompt | llm
 
     try:
-        response = chain.invoke({
-            "original_question": original_question
-        })
+        response = chain.invoke({"original_question": original_question})
         return response.content
     except Exception as e:
         st.error(f"질문 재작성 중 오류 발생: {e}")
@@ -295,7 +288,6 @@ def sentence_split(text):
 
 # Upstage Fact checker function -> Use UpStage API 
 def fact_checker(sentences: List[str], retrieved_docs: List[Document], api_key: str) -> Tuple[float, List[float]]:
-    # If api_key isn't available 
     if not api_key:
         st.warning("Fact Checking을 위해서는 Upstage API 키가 필요합니다. 기본 점수 0.0을 반환합니다.")
         return 0.0, [0.0] * len(sentences)
@@ -304,150 +296,165 @@ def fact_checker(sentences: List[str], retrieved_docs: List[Document], api_key: 
     try:
         groundedness_check = UpstageGroundednessCheck(api_key=api_key) # Pass API key
     except Exception as e:
-        st.error(f"Upstage GroundednessCheck 초기화 실패: {e}. Fact Checking을 건너<0xEB><0>뜁니다.")
+        st.error(f"Upstage GroundednessCheck 초기화 실패: {e}. Fact Checking을 건너뜁니다.")
         return 0.0, [0.0] * len(sentences)
-
 
     st.write(f"문장 {len(sentences)}개에 대해 Fact Checking 수행 중... (Upstage API 비용 발생)")
     for i, sentence in enumerate(sentences):
-        # Skip empty sentences
-        if not sentence: 
-            results.append(0.0) # Assign a default score or handle as needed
+        if not sentence:
+            results.append(0.0)
             continue
 
         best_score_for_sentence = 0.0
-        # st.write(f"  - 문장 {i+1}/{len(sentences)} 체크 중...") # optional detailed logging
         for doc in retrieved_docs:
             chunk = doc.page_content
-            request_input = {
-                "context": chunk,
-                "answer": sentence
-            }
+            request_input = {"context": chunk, "answer": sentence}
             try:
                 res = groundedness_check.invoke(request_input)
-                score = label_to_score.get(res, 0.0) # Default to 0.0 if label is unexpected
+                score = label_to_score.get(res, 0.0)
                 if score > best_score_for_sentence:
                     best_score_for_sentence = score
-                    if best_score_for_sentence == 1.0: # Optimization: if grounded, no need to check further docs for this sentence
-                         break
+                    if best_score_for_sentence == 1.0: break
             except Exception as e:
                 st.warning(f"Upstage API 호출 중 오류 발생 (문장: '{sentence[:30]}...'): {e}")
-                # decide how to handle API errors
-                # assign 0.0 or skip?
                 best_score_for_sentence = 0.0
-                break # Stop checking docs for this sentence on error
-
+                break
         results.append(best_score_for_sentence)
 
-    if not results: # Handle case where there are no valid sentences
-         return 0.0, []
-
+    if not results: return 0.0, []
     average_score = sum(results) / len(results)
     return average_score, results
 
-
-
 #################   GPT scoring  #################
 
-# LLM이 스코어 답변한 내용에서 값 parsing하는 함수
-def parse_rag_eval_scores(text: str) -> Dict[str, int]:
+def parse_rag_eval_scores(text: str, evaluate_semantic_similarity: bool = True) -> Dict[str, Optional[int]]:
+    # evaluate_semantic_similarity : semantic_similarity on/off
     """
     평가 항목별 점수를 모두 딕셔너리로 반환 (스코어 신뢰성 포함)
     출력: {'Answer Relevancy': 4, ..., '스코어 신뢰성': 2}
-    """
+    """    
     pattern = r"([가-힣A-Za-z\s]+):\s*([1-5])"
     matches = re.findall(pattern, text)
+    scores = {label.strip(): int(score) for label, score in matches}
 
-    return {label.strip(): int(score) for label, score in matches}
+    expected_keys = ["Answer Relevancy", "Faithfulness", "Intent Understanding", "스코어 신뢰성"]
+    if evaluate_semantic_similarity:
+        expected_keys.append("Semantic Similarity")
 
-#GPT를 이용한 LLM as judge 함수  ->  평가셋 가져오는 부분 미구현
-#출력 : [key : value]의 list. key는 평가셋
-def get_gpt_score(query: str, response: str, context: str, ground_truth: str, api_key: str) -> Dict[str, Any]:
-    # If api_key isn't available 
+    final_scores = {key: scores.get(key) for key in expected_keys}
+
+    return final_scores
+
+
+def get_gpt_score(
+    query: str,
+    response: str,
+    context: str,
+    ground_truth: Optional[str], # Made Optional
+    api_key: str,
+    evaluate_semantic_similarity: bool = True # New parameter
+) -> Dict[str, Any]:
+    """Get GPT scores, conditionally evaluating semantic similarity."""
+
     if not api_key:
         st.error("GPT Scoring을 위해서는 OpenAI API 키가 필요합니다.")
         return {"Error": "OpenAI API Key not provided"}
 
-    # Semantic Similarity는 Ground Truth 없이는 계산 불가 그래서 일단 빼고 구현
+    # Check if semantic similarity evaluation is possible and requested
+    # For future
+    can_evaluate_semantic = evaluate_semantic_similarity and ground_truth is not None
+    if evaluate_semantic_similarity and ground_truth is None:
+        st.warning("Semantic Similarity 평가가 요청되었지만 Ground Truth가 제공되지 않아 건너뜁니다.")
+        evaluate_semantic_similarity = False # Force disable if no GT
+
     eval_llm = ChatOpenAI(
-    model_name="gpt-4o",
-    temperature=0,
-    openai_api_key=api_key,
-    callbacks=[TRACER]
+        model_name=DEFAULT_GPT_SCORING_MODEL,
+        temperature=0,
+        openai_api_key=api_key,
+        callbacks=[TRACER]
     )
 
-    ground_truth = "기본 답변입니다. 이 부분에 대한 평가는 진행 X"
-    # 사용자 정의 프롬프트
-    user_prompt_template = """
-    [질문]
-    {query}
+    # Construct the prompt dynamically
+    base_prompt = """
+[질문]
+{query}
 
-    [LLM의 응답]
-    {llm_response}
+[LLM의 응답]
+{llm_response}
 
-    [정답 (Ground Truth)]
-    {ground_truth}
+[참조 문서 (Retrieved Context)]
+{retrieved_context}
+"""
+    # Add ground truth section
+    if can_evaluate_semantic:
+         base_prompt += f"""
+[정답 (Ground Truth)]
+{ground_truth}
+"""
 
-    [참조 문서 (Retrieved Context)]
-    {retrieved_context}
+    base_prompt += """
+당신은 농산물 RAG 시스템의 응답을 평가하는 전문가입니다. 아래의 항목별로 LLM 응답을 평가하고, 각 항목에 대해 **1점(매우 낮음) ~ 5점(매우 높음)** 사이의 점수를 부여하세요.
 
-    당신은 농산물 RAG 시스템의 응답을 평가하는 전문가입니다. 아래의 항목별로 LLM 응답을 평가하고, 각 항목에 대해 **1점(매우 낮음) ~ 5점(매우 높음)** 사이의 점수를 부여하세요. 
+---
 
-    ---
+### 평가 항목
 
-    ### 평가 항목
+1. **Answer Relevancy**
+질문에서 묻는 모든 요소에 대해 답변하였는지 평가하세요.
+2. **Faithfulness**
+응답이 RAG가 검색한 문서(retrieved_context)의 내용만을 기반으로 작성되었는지 평가하세요.
+*문서에 없는 내용을 LLM이 임의로 생성했을 경우 낮은 점수*
+3. **Intent Understanding**
+사용자의 질문 의도를 정확히 파악했는지 평가하세요.
+점수 기준 예시:
+- **5점 (우수)**: 질문에 대해 올바르게 답하고, 사용자의 의도를 파악하여 추가 정보나 질문을 제시함
+    - 예: '상추의 잎이 시들어요'에 대해 병명을 제시하고, 방제법도 함께 안내
+- **3점 (보통)**: 질문에 대해 올바르게 답했으나, 의도에 대한 확장 응답은 없음
+    - 예: '상추의 잎이 시들어요'에 대해 병명만 제시
+- **1점 (미흡)**: 질문에 부적절한 응답을 하거나, 질문 자체를 오해함
+    - 예: '상추의 잎이 시륻어요' (오탈자 포함)를 인식하지 못하거나 엉뚱한 답변
+"""
+    # Add Semantic Similarity section conditionally
+    if evaluate_semantic_similarity:
+        base_prompt += """4. **Semantic Similarity**
+Ground Truth와 LLM 응답이 내용 및 맥락적으로 유사한지 평가하세요.
+*답변이 의미는 같으나 표현만 다를 경우는 높은 점수, 전혀 다른 논지일 경우 낮은 점수*
+"""
 
-    1. **Answer Relevancy**  
-    질문에서 묻는 모든 요소에 대해 답변하였는지 평가하세요.
-    2. **Faithfulness**  
-    응답이 RAG가 검색한 문서(retrieved_context)의 내용만을 기반으로 작성되었는지 평가하세요.  
-    *문서에 없는 내용을 LLM이 임의로 생성했을 경우 낮은 점수*
-    3. **Intent Understanding**  
-    사용자의 질문 의도를 정확히 파악했는지 평가하세요.  
-    점수 기준 예시:  
-    - **5점 (우수)**: 질문에 대해 올바르게 답하고, 사용자의 의도를 파악하여 추가 정보나 질문을 제시함  
-        - 예: '상추의 잎이 시들어요'에 대해 병명을 제시하고, 방제법도 함께 안내  
-    - **3점 (보통)**: 질문에 대해 올바르게 답했으나, 의도에 대한 확장 응답은 없음  
-        - 예: '상추의 잎이 시들어요'에 대해 병명만 제시  
-    - **1점 (미흡)**: 질문에 부적절한 응답을 하거나, 질문 자체를 오해함  
-        - 예: '상추의 잎이 시륻어요' (오탈자 포함)를 인식하지 못하거나 엉뚱한 답변
-    4. **Semantic Similarity**  
-    Ground Truth와 LLM 응답이 내용 및 맥락적으로 유사한지 평가하세요.  
-    *답변이 의미는 같으나 표현만 다를 경우는 높은 점수, 전혀 다른 논지일 경우 낮은 점수*
-   
-    가능한 한 **객관적**으로 평가해 주세요. 또한, 추가적으로 평가한 **스코어 신뢰성**에 대해서도 출력해주세요
-    ### 출력 형식
+    base_prompt += """
+가능한 한 **객관적**으로 평가해 주세요. 또한, 추가적으로 평가한 **스코어 신뢰성**에 대해서도 출력해주세요
+### 출력 형식
 
-    아래 형식에 맞춰 **숫자만** 한 줄씩 출력하세요.  
-    **다른 설명 없이 아래 형식만 출력해야 합니다.**
+아래 형식에 맞춰 **숫자만** 한 줄씩 출력하세요.
+**다른 설명 없이 아래 형식만 출력해야 합니다.**
 
-    예시 출력:
-    Answer Relevancy: 4
-    Faithfulness: 5
-    Intent Understanding: 3
-    Semantic Similarity: 4
-    스코어 신뢰성 : 2
-    """
+예시 출력:
+Answer Relevancy: 4
+Faithfulness: 5
+Intent Understanding: 3
+"""
+    # Add Semantic Similarity section conditionally
+    if evaluate_semantic_similarity:
+        base_prompt += "Semantic Similarity: 4\n"
+    base_prompt += "스코어 신뢰성 : 2"
 
-    custom_prompt = user_prompt_template.format(
+    # Format the final prompt
+    custom_prompt = base_prompt.format(
         query=query,
         llm_response=response,
-        ground_truth=ground_truth,
-        retrieved_context = context   #문서 여러개 한번에 넣을 수 있는지 체크
+        retrieved_context=context, #문서 여러개 한번에 넣을 수 있는지 체크
+        ground_truth=ground_truth if evaluate_semantic_similarity else "N/A" # only if used
     )
 
     st.write(f"GPT 자동 평가 실행 중... ({DEFAULT_GPT_SCORING_MODEL})")
     try:
         llm_judge_response = eval_llm.invoke([HumanMessage(content=custom_prompt)])
-        score_dict = parse_rag_eval_scores(llm_judge_response.content)
-
-        return score_dict  #신뢰성 포함된 전체 점수 딕셔너리
-
+        # Pass the flag to the parser
+        score_dict = parse_rag_eval_scores(llm_judge_response.content, evaluate_semantic_similarity)
+        return score_dict #신뢰성 포함된 전체 점수 딕셔너리
     except Exception as e:
         st.error(f"GPT Scoring 중 오류 발생: {e}")
         return {"Error": str(e)}
-
-
 
 ##########################   LLM 답변 생성까지의 Pipeline function  ###############################
 
@@ -459,14 +466,14 @@ def run_rag_pipeline(
     vectorstore: FAISS,
     retriever_k: int,
     use_reranker: bool,
-    reranker_method: str,
+    reranker_method: Optional[str], # can None
     reranker_top_k: int,
-    summarize_before_rerank: bool, # If true, use OpenAI API
-    llm_model_name: str, # OpenAI 모델 사용 시 비용 발생
+    summarize_before_rerank: bool,
+    llm_model_name: str,
     openai_api_key: str,
-    run_id: str = "" # 로깅을 위한 실행 식별자(optional)
+    run_id: str = ""
 ) -> Tuple[str, List[Document]]:
-    """Retrieve-Rerank(Optional)-Generate 파이프라인을 실행합니다."""
+    """Run the Retrieve-Rerank(Optional)-Generate pipeline."""
 
     log_prefix = f"[{run_id}] " if run_id else ""
 
@@ -478,27 +485,25 @@ def run_rag_pipeline(
 
     # 2. Rerank (Optional)
     final_docs = []
-    if use_reranker:
-        if reranker_method and reranker_method in AVAILABLE_RERANKERS:
-             st.write(f"{log_prefix}2. 문서 재순위화 중 (Top {reranker_top_k}, Method: {reranker_method})...")
-             # Note: summarize_before_rerank controls summarization *before* reranking
-             final_docs = summarize_and_rerank(
-                 query=question,
-                 docs=initial_docs,
-                 summarize_first=summarize_before_rerank,
-                 method=reranker_method,
-                 top_k=reranker_top_k,
-                 openai_api_key=openai_api_key
-             )
-             if not final_docs:
-                 st.warning(f"{log_prefix}   재순위화 후 유효한 문서가 없습니다. 초기 검색 결과 일부를 사용합니다.")
-                 final_docs = initial_docs[:reranker_top_k] # Fallback uses reranker_top_k
-        else:
-             st.warning(f"{log_prefix}   유효하지 않거나 선택되지 않은 리랭커({reranker_method}). 리랭킹을 건너<0xEB><0>뜁니다. 초기 검색 결과 일부를 사용합니다.")
-             final_docs = initial_docs[:reranker_top_k] # Use top initial docs if reranker is invalid/None
-    else: # No reranking requested
-        st.write(f"{log_prefix}2. 리랭커를 사용하지 않음. 초기 검색 결과 사용 (상위 {reranker_top_k}개).")
-        final_docs = initial_docs[:reranker_top_k] # Use top initial docs, limited by reranker_top_k for consistency
+    if use_reranker and reranker_method: # Check if method is provided
+        st.write(f"{log_prefix}2. 문서 rerank 중 (Top {reranker_top_k}, Method: {reranker_method})...")
+        final_docs = summarize_and_rerank(
+             query=question,
+             docs=initial_docs,
+             summarize_first=summarize_before_rerank,
+             method=reranker_method,
+             top_k=reranker_top_k,
+             openai_api_key=openai_api_key
+         )
+        if not final_docs:
+             st.warning(f"{log_prefix}   rerank 후 유효한 문서가 없습니다. 초기 검색 결과 일부를 사용합니다.")
+             final_docs = initial_docs[:reranker_top_k]
+    elif use_reranker and not reranker_method:
+         st.warning(f"{log_prefix}   reranker 사용이 선택되었으나 모델이 지정되지 않았습니다. reranking을 건너<0xEB>뜁니다.")
+         final_docs = initial_docs[:reranker_top_k]
+    else: # No reranking requested or no method specified
+        st.write(f"{log_prefix}2. reranker 사용하지 않음. 초기 검색 결과 사용 (상위 {reranker_top_k}개).")
+        final_docs = initial_docs[:reranker_top_k]
 
     if not final_docs:
          st.error(f"{log_prefix}   답변 생성에 사용할 문서를 얻지 못했습니다.")
@@ -515,7 +520,6 @@ def run_rag_pipeline(
         prompt_hub = hub.pull("rlm/rag-prompt") # Standard RAG prompt
     except Exception as e:
         st.error(f"Langchain Hub에서 프롬프트를 가져오는 데 실패했습니다: {e}")
-        # Fallback to a basic prompt
         prompt_hub = PromptTemplate.from_template(
              "질문: {question}\n\n문서: {context}\n\nAnswer:"
         )
@@ -533,7 +537,6 @@ def run_rag_pipeline(
         | StrOutputParser()
     ).with_config({"callbacks": [TRACER]})# For callback tracing
 
-    # Invoke the chain with the original question
     try:
         response = rag_chain.invoke(question)
         st.write(f"{log_prefix}   답변 생성 완료.")
@@ -541,6 +544,28 @@ def run_rag_pipeline(
     except Exception as e:
         st.error(f"{log_prefix}   LLM 호출 중 오류 발생: {e}")
         return f"오류: 답변 생성 중 문제가 발생했습니다 ({e})", final_docs
+
+########## Evaluation Set Handling #############
+def load_evaluation_set(uploaded_file) -> Optional[List[Dict[str, Any]]]:
+    # Loads questions and answer
+    if uploaded_file is None:
+        st.error("평가셋 파일을 업로드해주세요.")
+        return None
+    try:
+        # Make sure to rewind the file pointer before reading
+        uploaded_file.seek(0)
+        eval_data = json.load(uploaded_file)
+        if not isinstance(eval_data, list) or not all(isinstance(item, dict) and 'question' in item and 'answer' in item for item in eval_data):
+             st.error("평가셋 파일 형식이 올바르지 않습니다. 'question'과 'answer' 키를 포함하는 JSON 리스트여야 합니다.")
+             return None
+        st.success(f"평가셋 로드 완료: {len(eval_data)}개 질문")
+        return eval_data
+    except json.JSONDecodeError:
+        st.error("평가셋 파일을 JSON 형식으로 읽는 데 실패했습니다.")
+        return None
+    except Exception as e:
+        st.error(f"평가셋 파일 처리 중 오류 발생: {e}")
+        return None
 
 # --- Streamlit App UI ---
 st.set_page_config(page_title="RAG 시스템 (농산물 QA)", layout="wide")
@@ -731,11 +756,11 @@ if vectorstore:
         help="평가에 사용할 임베딩 모델들을 선택합니다. 'openai' 선택 시 비용 발생."
     )
 
-    eval_use_reranker = st.sidebar.checkbox("평가 시 리랭커 사용", value=True)
+    eval_use_reranker = st.sidebar.checkbox("평가 시 reranker 사용", value=True)
     eval_rerankers = []
     if eval_use_reranker:
         eval_rerankers = st.sidebar.multiselect(
-            "평가할 리랭커 모델 선택",
+            "평가할 reranker 모델 선택",
             options=AVAILABLE_RERANKERS,
             default=AVAILABLE_RERANKERS # Default to all
         )
@@ -750,7 +775,7 @@ if vectorstore:
         if not eval_embeddings:
              st.warning("평가를 위해 최소 하나 이상의 임베딩 모델을 선택해야 합니다.")
         elif eval_use_reranker and not eval_rerankers:
-             st.warning("리랭커 사용이 선택되었으나, 평가할 리랭커 모델이 선택되지 않았습니다.")
+             st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
         else:
             # Determine reranker list: either selected ones or [None] if not using reranker
             reranker_list_to_iterate = eval_rerankers if eval_use_reranker else [None]
@@ -866,6 +891,270 @@ if vectorstore:
                              )
                      else:
                          st.write("사용된 문서가 없습니다.")
+
+
+
+# --- New Evaluation (Using Evaluation Set) ---
+st.sidebar.markdown("---")
+st.sidebar.header("모델 조합 평가 (평가셋 사용)")
+st.sidebar.caption("업로드된 평가셋 파일의 모든 질문을 사용하여 모델 조합별 성능을 평가하고 평균 점수를 계산합니다.")
+
+uploaded_eval_file = st.sidebar.file_uploader("평가셋 파일 업로드 (.json)", type=['json'], key="eval_file_uploader")
+
+eval_embeddings_set = st.sidebar.multiselect(
+    "평가할 임베딩 모델 (평가셋)",
+    options=list(AVAILABLE_EMBEDDINGS.keys()),
+    default=list(AVAILABLE_EMBEDDINGS.keys()), # Default to all
+    help="평가셋 평가에 사용할 임베딩 모델들을 선택."
+)
+
+eval_use_reranker_set = st.sidebar.checkbox("평가셋 평가 시 reranker 사용", value=True)
+eval_rerankers_set = []
+if eval_use_reranker_set:
+    eval_rerankers_set = st.sidebar.multiselect(
+        "평가할 reranker 모델 (평가셋)",
+        options=AVAILABLE_RERANKERS,
+        default=AVAILABLE_RERANKERS # Default to all
+    )
+
+# Use session state to store results across potential reruns
+if 'evaluation_details' not in st.session_state:
+    st.session_state.evaluation_details = {}
+if 'aggregated_scores' not in st.session_state:
+    st.session_state.aggregated_scores = {}
+
+if st.sidebar.button("평가셋으로 모델 조합 평가 실행") and uploaded_eval_file and eval_embeddings_set:
+    st.markdown("---")
+    st.header("모델 조합 평가 결과 (평가셋)")
+
+    evaluation_set = load_evaluation_set(uploaded_eval_file)
+
+    if evaluation_set:
+        # Reset previous results before starting a new evaluation
+        st.session_state.evaluation_details = {}
+        st.session_state.aggregated_scores = {}
+
+        reranker_list_to_iterate_set = eval_rerankers_set if eval_use_reranker_set else [None]
+
+        if eval_use_reranker_set and not eval_rerankers_set:
+            st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
+        else:
+            total_combinations = len(eval_embeddings_set) * len(reranker_list_to_iterate_set)
+            total_questions = len(evaluation_set)
+            st.info(f"{len(eval_embeddings_set)}개 임베딩, {len(reranker_list_to_iterate_set)}개 리랭커 설정으로 총 {total_combinations}회 조합 평가.")
+            st.info(f"각 조합당 {total_questions}개 질문에 대해 평가를 실행합니다 (총 {total_combinations * total_questions}회 RAG 실행).")
+            st.info(f"각 실행 시 부가 기능 설정이 적용됩니다.")
+
+            progress_bar = st.progress(0.0)
+            progress_text = st.empty()
+            runs_completed = 0
+            total_runs = total_combinations * total_questions
+
+            for emb_alias in eval_embeddings_set:
+                current_vectorstore = get_cached_vector_store(emb_alias, OPENAI_API_KEY)
+                if not current_vectorstore:
+                    st.error(f"평가 중단: '{emb_alias}' 벡터 DB 로드 실패.")
+                    runs_completed += len(reranker_list_to_iterate_set) * total_questions
+                    progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0) # Avoid division by zero
+                    continue
+
+                for reranker_method in reranker_list_to_iterate_set:
+                    reranker_display_name = '사용 안 함' if not eval_use_reranker_set or reranker_method is None else reranker_method
+                    combination_key = (emb_alias, reranker_display_name)
+
+                    # Initialize lists for this combination in both dicts
+                    if combination_key not in st.session_state.aggregated_scores:
+                        st.session_state.aggregated_scores[combination_key] = {'fact_check_scores': [], 'gpt_scores': []}
+                    if combination_key not in st.session_state.evaluation_details:
+                            st.session_state.evaluation_details[combination_key] = []
+
+                    st.subheader(f"조합 평가 중: Emb: {emb_alias}, Rerank: {reranker_display_name}")
+
+                    # Cost flags
+                    run_cost_flags = []
+                    if emb_alias == 'openai': run_cost_flags.append("OpenAI Emb")
+                    if summarize_before_rerank_toggle: run_cost_flags.append("OpenAI Sum")
+                    if selected_llm.startswith('gpt'): run_cost_flags.append(f"OpenAI LLM")
+                    if use_fact_checker_toggle: run_cost_flags.append("Upstage FC")
+                    if use_gpt_scoring_toggle: run_cost_flags.append(f"OpenAI Score (x{total_questions})")
+                    if run_cost_flags: st.caption(f"API 비용 발생 가능: {', '.join(run_cost_flags)}")
+
+                    for i, eval_item in enumerate(evaluation_set):
+                        eval_question = eval_item['question']
+                        eval_ground_truth = eval_item['answer']
+                        run_id = f"Set_Emb:{emb_alias}_Rerank:{reranker_display_name}_Q:{i+1}"
+
+                        progress_text.text(f"진행률: {runs_completed+1}/{total_runs} - {run_id}")
+
+                        eval_response = "오류"
+                        eval_docs_used = []
+                        avg_fact_check_score = None
+                        gpt_scores = None
+
+                        try:
+                            with st.spinner(f"[{run_id}] RAG 파이프라인 실행 중..."):
+                                    eval_response, eval_docs_used = run_rag_pipeline(
+                                        question=eval_question, vectorstore=current_vectorstore,
+                                        retriever_k=retriever_k_value, use_reranker=eval_use_reranker_set,
+                                        reranker_method=reranker_method, reranker_top_k=reranker_top_k_value,
+                                        summarize_before_rerank=summarize_before_rerank_toggle,
+                                        llm_model_name=selected_llm, openai_api_key=OPENAI_API_KEY,
+                                        run_id=run_id
+                                    )
+
+                            if use_fact_checker_toggle and eval_docs_used:
+                                    with st.spinner(f"[{run_id}] Fact Checking 중..."):
+                                        sentences = sentence_split(eval_response)
+                                        if sentences:
+                                            avg_fact_check_score, _ = fact_checker(sentences, eval_docs_used, UPSTAGE_API_KEY)
+                                    if avg_fact_check_score is not None:
+                                        # Store for average calculation
+                                        st.session_state.aggregated_scores[combination_key]['fact_check_scores'].append(avg_fact_check_score)
+
+                            if use_gpt_scoring_toggle and eval_docs_used:
+                                    with st.spinner(f"[{run_id}] GPT Scoring 중..."):
+                                        context_str = format_docs(eval_docs_used)
+                                        gpt_scores = get_gpt_score(
+                                            query=eval_question, response=eval_response, context=context_str,
+                                            ground_truth=eval_ground_truth, api_key=OPENAI_API_KEY,
+                                            evaluate_semantic_similarity=True
+                                        )
+                                    if gpt_scores and "Error" not in gpt_scores:
+                                        # Store for average calculation
+                                        st.session_state.aggregated_scores[combination_key]['gpt_scores'].append(gpt_scores)
+
+                            # Store detailed results for this question regardless of errors in scoring
+                            st.session_state.evaluation_details[combination_key].append({
+                                    "question": eval_question,
+                                    "ground_truth": eval_ground_truth,
+                                    "response": eval_response,
+                                    "fact_check_score": avg_fact_check_score, # May be None
+                                    "gpt_score": gpt_scores, # May be None or contain Error
+                                    "used_docs": eval_docs_used
+                                })
+
+                        except Exception as e:
+                            st.error(f"[{run_id}] 평가 실행 중 오류: {e}")
+                            # Store minimal detail on error
+                            st.session_state.evaluation_details[combination_key].append({
+                                "question": eval_question,
+                                "ground_truth": eval_ground_truth,
+                                "response": f"오류 발생: {e}",
+                                "fact_check_score": None,
+                                "gpt_score": {"Error": str(e)},
+                                "used_docs": []
+                            })
+                        finally:
+                            runs_completed += 1
+                            progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0)
+
+                    progress_text.text(f"진행률: {runs_completed}/{total_runs} - 조합 완료: Emb: {emb_alias}, Rerank: {reranker_display_name}")
+
+            progress_bar.progress(1.0)
+            progress_text.text(f"평가 완료! 총 {runs_completed}/{total_runs} 실행 완료.")
+
+            # --- Calculate and Display Average Scores ---
+            st.markdown("---")
+            st.subheader("평가셋 기반 모델 조합별 평균 점수")
+
+            avg_results_display = []
+            # Use st.session_state for accessing results
+            for (emb_alias, reranker_name), scores_data in st.session_state.aggregated_scores.items():
+                num_successful_gpt_runs = len([s for s in scores_data.get('gpt_scores', []) if s and "Error" not in s])
+                if num_successful_gpt_runs == 0 and not scores_data.get('fact_check_scores'):
+                    avg_results_display.append(f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: 0/{total_questions}) - 결과 없음")
+                    avg_results_display.append("---")
+                    continue
+
+                avg_fact_check = np.mean(scores_data['fact_check_scores']) if scores_data['fact_check_scores'] else None
+
+                avg_gpt_scores = {}
+                if scores_data['gpt_scores']:
+                    first_valid_score = next((s for s in scores_data['gpt_scores'] if s and "Error" not in s), None)
+                    if first_valid_score:
+                            score_keys = first_valid_score.keys()
+                            for key in score_keys:
+                                key_scores = [s[key] for s in scores_data['gpt_scores'] if s and "Error" not in s and key in s and s[key] is not None]
+                                if key_scores:
+                                    avg_gpt_scores[f"Avg. {key}"] = np.mean(key_scores)
+                                else:
+                                    avg_gpt_scores[f"Avg. {key}"] = None
+
+                result_line = f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: {num_successful_gpt_runs}/{total_questions})"
+                avg_results_display.append(result_line)
+
+                if avg_fact_check is not None: avg_results_display.append(f"  - Avg. Fact Check Score: {avg_fact_check:.4f}")
+                if avg_gpt_scores:
+                        for key, avg_val in avg_gpt_scores.items():
+                            avg_results_display.append(f"  - {key}: {avg_val:.4f}" if avg_val is not None else f"  - {key}: N/A")
+                avg_results_display.append("---")
+
+            st.markdown("\n".join(avg_results_display))
+
+            # --- Display Detailed Results ---
+            st.markdown("---")
+            st.subheader("평가셋 기반 모델 조합별 상세 결과")
+
+            # Use st.session_state for accessing details
+            if not st.session_state.evaluation_details:
+                    st.write("상세 결과가 없습니다.")
+            else:
+                    for (emb_alias, reranker_name), details_list in st.session_state.evaluation_details.items():
+                        expander_label = f"Embedding: {emb_alias}, Reranker: {reranker_name} (총 {len(details_list)}개 질문)"
+                        with st.expander(expander_label):
+                            if not details_list:
+                                st.write("이 조합에 대한 결과가 없습니다.")
+                                continue
+
+                            for i, item in enumerate(details_list):
+                                st.markdown(f"**질문 {i+1}:** {item['question']}")
+                                st.markdown(f"**정답:** {item['ground_truth']}")
+                                st.markdown(f"**AI 응답:**")
+                                st.write(item['response']) # Use st.write for potentially long answers
+
+                                # Display scores if available
+                                if item['fact_check_score'] is not None:
+                                    st.caption(f"Fact Check Score: {item['fact_check_score']:.4f}")
+                                if item['gpt_score'] is not None:
+                                    if "Error" in item['gpt_score']:
+                                        st.error(f"GPT Score Error: {item['gpt_score']['Error']}")
+                                    else:
+                                        st.caption("GPT Score:")
+                                        st.json(item['gpt_score'])
+
+                                 # Display
+                                used_docs = item.get('used_docs', [])
+                                st.markdown("---")
+                                if used_docs:
+                                    st.markdown(f"**참고한 문서 ({len(used_docs)}개):**")
+                                    for j, doc in enumerate(used_docs):
+                       
+                                        doc_metadata = getattr(doc, 'metadata', {})
+                                        doc_page_content = getattr(doc, 'page_content', 'N/A')
+
+                                        st.markdown(f"**문서 {j+1}:**")
+                                        st.markdown(f"*출처: {doc_metadata.get('file_name', 'N/A')} (인덱스: {doc_metadata.get('index', 'N/A')})*")
+
+                                        # Unique key for the text_area inside
+                                        doc_content_key = f"detail_doc_content_{emb_alias}_{reranker_name}_{i}_{j}"
+
+                                        st.text_area(
+                                            label=f"문서 {j+1} 내용",
+                                            value=doc_page_content,
+                                            height=100,
+                                            key=doc_content_key
+                                        )
+                                    st.markdown("<br>", unsafe_allow_html=True) # 문서 목록 아래에 약간의 공간 추가
+                                else:
+                                    st.markdown("**참고한 문서:** 없음") # 문서가 없을 때 표시
+                                
+                                # st.markdown("---") # Separator between questions
+
+# Display results even if the button wasn't clicked in this run (results might be in session state)
+elif st.session_state.evaluation_details:
+    st.markdown("---")
+    st.subheader("이전 평가 결과 (평가셋 기반)")
+    st.info("새로운 평가를 실행하려면 평가셋 파일을 업로드하고 '평가셋으로 모델 조합 평가 실행' 버튼을 클릭하세요.")
 
 else:
     st.warning("벡터 DB를 로드할 수 없습니다. 사이드바에서 선택된 임베딩 모델에 대한 FAISS 인덱스가 '{FAISS_DB_PATH}' 경로에 있는지 확인해주세요.")
