@@ -74,7 +74,7 @@ AVAILABLE_EMBEDDINGS = {
 AVAILABLE_RERANKERS = ["ko-rerank", "mini", "bge"]
 # --- Default Settings ---
 DEFAULT_EMBEDDING_ALIAS = "bge-m3"
-DEFAULT_RERANKER_METHOD = "bge"
+DEFAULT_RERANKER_METHOD = "ko-rerank"
 DEFAULT_RETRIEVER_K = 8
 DEFAULT_RERANKER_TOP_K = 4
 DEFAULT_LLM_MODEL_NAME = "gpt-4o"
@@ -1000,293 +1000,293 @@ if vectorstore:
 
 
 
-######################## ---   평가셋 실험 코드   ---#####################
-st.sidebar.markdown("---")
-st.sidebar.header("모델 조합 평가 (평가셋 사용)")
-st.sidebar.caption("업로드된 평가셋 파일의 모든 질문을 사용하여 모델 조합별 성능을 평가하고 평균 점수를 계산합니다.")
+    ######################## ---   평가셋 실험 코드   ---#####################
+    st.sidebar.markdown("---")
+    st.sidebar.header("모델 조합 평가 (평가셋 사용)")
+    st.sidebar.caption("업로드된 평가셋 파일의 모든 질문을 사용하여 모델 조합별 성능을 평가하고 평균 점수를 계산합니다.")
 
-uploaded_eval_file = st.sidebar.file_uploader("평가셋 파일 업로드 (.json)", type=['json'], key="eval_file_uploader")
+    uploaded_eval_file = st.sidebar.file_uploader("평가셋 파일 업로드 (.json)", type=['json'], key="eval_file_uploader")
 
-eval_embeddings_set = st.sidebar.multiselect(
-    "평가할 임베딩 모델 (평가셋)",
-    options=list(AVAILABLE_EMBEDDINGS.keys()),
-    default=list(AVAILABLE_EMBEDDINGS.keys()), # Default to all
-    help="평가셋 평가에 사용할 임베딩 모델들을 선택."
-)
-
-eval_use_reranker_set = st.sidebar.checkbox("평가셋 평가 시 reranker 사용", value=True)
-eval_rerankers_set = []
-if eval_use_reranker_set:
-    eval_rerankers_set = st.sidebar.multiselect(
-        "평가할 reranker 모델 (평가셋)",
-        options=AVAILABLE_RERANKERS,
-        default=AVAILABLE_RERANKERS # Default to all
+    eval_embeddings_set = st.sidebar.multiselect(
+        "평가할 임베딩 모델 (평가셋)",
+        options=list(AVAILABLE_EMBEDDINGS.keys()),
+        default=list(AVAILABLE_EMBEDDINGS.keys()), # Default to all
+        help="평가셋 평가에 사용할 임베딩 모델들을 선택."
     )
 
-# Use session state to store results across potential reruns
-if 'evaluation_details' not in st.session_state:
-    st.session_state.evaluation_details = {}
-if 'aggregated_scores' not in st.session_state:
-    st.session_state.aggregated_scores = {}
+    eval_use_reranker_set = st.sidebar.checkbox("평가셋 평가 시 reranker 사용", value=True)
+    eval_rerankers_set = []
+    if eval_use_reranker_set:
+        eval_rerankers_set = st.sidebar.multiselect(
+            "평가할 reranker 모델 (평가셋)",
+            options=AVAILABLE_RERANKERS,
+            default=AVAILABLE_RERANKERS # Default to all
+        )
 
-if st.sidebar.button("평가셋으로 모델 조합 평가 실행") and uploaded_eval_file and eval_embeddings_set:
-    st.markdown("---")
-    st.header("모델 조합 평가 결과 (평가셋)")
-
-    evaluation_set = load_evaluation_set(uploaded_eval_file)
-
-    if evaluation_set:
-        # Reset previous results before starting a new evaluation
+    # Use session state to store results across potential reruns
+    if 'evaluation_details' not in st.session_state:
         st.session_state.evaluation_details = {}
+    if 'aggregated_scores' not in st.session_state:
         st.session_state.aggregated_scores = {}
 
-        reranker_list_to_iterate_set = eval_rerankers_set if eval_use_reranker_set else [None]
+    if st.sidebar.button("평가셋으로 모델 조합 평가 실행") and uploaded_eval_file and eval_embeddings_set:
+        st.markdown("---")
+        st.header("모델 조합 평가 결과 (평가셋)")
 
-        if eval_use_reranker_set and not eval_rerankers_set:
-            st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
-        else:
-            total_combinations = len(eval_embeddings_set) * len(reranker_list_to_iterate_set)
-            total_questions = len(evaluation_set)
-            st.info(f"{len(eval_embeddings_set)}개 임베딩, {len(reranker_list_to_iterate_set)}개 리랭커 설정으로 총 {total_combinations}회 조합 평가.")
-            st.info(f"각 조합당 {total_questions}개 질문에 대해 평가를 실행합니다 (총 {total_combinations * total_questions}회 RAG 실행).")
-            st.info(f"각 실행 시 부가 기능 설정이 적용됩니다.")
+        evaluation_set = load_evaluation_set(uploaded_eval_file)
 
-            progress_bar = st.progress(0.0)
-            progress_text = st.empty()
-            runs_completed = 0
-            total_runs = total_combinations * total_questions
+        if evaluation_set:
+            # Reset previous results before starting a new evaluation
+            st.session_state.evaluation_details = {}
+            st.session_state.aggregated_scores = {}
 
-            for emb_alias in eval_embeddings_set:
-                current_vectorstore = get_cached_vector_store(emb_alias, OPENAI_API_KEY)
-                if not current_vectorstore:
-                    st.error(f"평가 중단: '{emb_alias}' 벡터 DB 로드 실패.")
-                    runs_completed += len(reranker_list_to_iterate_set) * total_questions
-                    progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0) # Avoid division by zero
-                    continue
+            reranker_list_to_iterate_set = eval_rerankers_set if eval_use_reranker_set else [None]
 
-                for reranker_method in reranker_list_to_iterate_set:
-                    reranker_display_name = '사용 안 함' if not eval_use_reranker_set or reranker_method is None else reranker_method
-                    combination_key = (emb_alias, reranker_display_name)
+            if eval_use_reranker_set and not eval_rerankers_set:
+                st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
+            else:
+                total_combinations = len(eval_embeddings_set) * len(reranker_list_to_iterate_set)
+                total_questions = len(evaluation_set)
+                st.info(f"{len(eval_embeddings_set)}개 임베딩, {len(reranker_list_to_iterate_set)}개 리랭커 설정으로 총 {total_combinations}회 조합 평가.")
+                st.info(f"각 조합당 {total_questions}개 질문에 대해 평가를 실행합니다 (총 {total_combinations * total_questions}회 RAG 실행).")
+                st.info(f"각 실행 시 부가 기능 설정이 적용됩니다.")
 
-                    # Initialize lists for this combination in both dicts
-                    if combination_key not in st.session_state.aggregated_scores:
-                        st.session_state.aggregated_scores[combination_key] = {'fact_check_scores': [], 'combined_scores': [], 'f1_scores': []}
-                    if combination_key not in st.session_state.evaluation_details:
-                            st.session_state.evaluation_details[combination_key] = []
+                progress_bar = st.progress(0.0)
+                progress_text = st.empty()
+                runs_completed = 0
+                total_runs = total_combinations * total_questions
 
-                    st.subheader(f"조합 평가 중: Emb: {emb_alias}, Rerank: {reranker_display_name}")
+                for emb_alias in eval_embeddings_set:
+                    current_vectorstore = get_cached_vector_store(emb_alias, OPENAI_API_KEY)
+                    if not current_vectorstore:
+                        st.error(f"평가 중단: '{emb_alias}' 벡터 DB 로드 실패.")
+                        runs_completed += len(reranker_list_to_iterate_set) * total_questions
+                        progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0) # Avoid division by zero
+                        continue
 
-                    # Cost flags
-                    run_cost_flags = []
-                    if emb_alias == 'openai': run_cost_flags.append("OpenAI Emb")
-                    if summarize_before_rerank_toggle: run_cost_flags.append("OpenAI Sum")
-                    if selected_llm.startswith('gpt'): run_cost_flags.append(f"OpenAI LLM")
-                    if use_fact_checker_toggle: run_cost_flags.append("Upstage FC")
-                    if use_gpt_scoring_toggle: run_cost_flags.append(f"OpenAI Score (x{total_questions})")
-                    if run_cost_flags: st.caption(f"API 비용 발생 가능: {', '.join(run_cost_flags)}")
+                    for reranker_method in reranker_list_to_iterate_set:
+                        reranker_display_name = '사용 안 함' if not eval_use_reranker_set or reranker_method is None else reranker_method
+                        combination_key = (emb_alias, reranker_display_name)
 
-                    for i, eval_item in enumerate(evaluation_set):
-                        eval_question = eval_item['question']
-                        eval_ground_truth = eval_item['answer']
-                        run_id = f"Set_Emb:{emb_alias}_Rerank:{reranker_display_name}_Q:{i+1}"
+                        # Initialize lists for this combination in both dicts
+                        if combination_key not in st.session_state.aggregated_scores:
+                            st.session_state.aggregated_scores[combination_key] = {'fact_check_scores': [], 'combined_scores': [], 'f1_scores': []}
+                        if combination_key not in st.session_state.evaluation_details:
+                                st.session_state.evaluation_details[combination_key] = []
 
-                        progress_text.text(f"진행률: {runs_completed+1}/{total_runs} - {run_id}")
+                        st.subheader(f"조합 평가 중: Emb: {emb_alias}, Rerank: {reranker_display_name}")
 
-                        #response 및 score 선언언
-                        eval_response = "오류"
-                        eval_docs_used = []
-                        avg_fact_check_score = None
-                        avg_f1_score = None
-                        combined_scores = None
+                        # Cost flags
+                        run_cost_flags = []
+                        if emb_alias == 'openai': run_cost_flags.append("OpenAI Emb")
+                        if summarize_before_rerank_toggle: run_cost_flags.append("OpenAI Sum")
+                        if selected_llm.startswith('gpt'): run_cost_flags.append(f"OpenAI LLM")
+                        if use_fact_checker_toggle: run_cost_flags.append("Upstage FC")
+                        if use_gpt_scoring_toggle: run_cost_flags.append(f"OpenAI Score (x{total_questions})")
+                        if run_cost_flags: st.caption(f"API 비용 발생 가능: {', '.join(run_cost_flags)}")
 
-                        try:
-                            with st.spinner(f"[{run_id}] RAG 파이프라인 실행 중..."):
-                                    eval_response, eval_docs_used = run_rag_pipeline(
-                                        question=eval_question, vectorstore=current_vectorstore,
-                                        retriever_k=retriever_k_value, use_reranker=eval_use_reranker_set,
-                                        reranker_method=reranker_method, reranker_top_k=reranker_top_k_value,
-                                        summarize_before_rerank=summarize_before_rerank_toggle,
-                                        llm_model_name=selected_llm, openai_api_key=OPENAI_API_KEY,
-                                        run_id=run_id
-                                    )
+                        for i, eval_item in enumerate(evaluation_set):
+                            eval_question = eval_item['question']
+                            eval_ground_truth = eval_item['answer']
+                            run_id = f"Set_Emb:{emb_alias}_Rerank:{reranker_display_name}_Q:{i+1}"
 
-                            if use_fact_checker_toggle and eval_docs_used:
-                                    with st.spinner(f"[{run_id}] Fact Checking 중..."):
-                                        sentences = sentence_split(eval_response)
-                                        if sentences:
-                                            avg_fact_check_score, _ = fact_checker(sentences, eval_docs_used, UPSTAGE_API_KEY)
-                                    if avg_fact_check_score is not None:
-                                        # Store for average calculation
-                                        st.session_state.aggregated_scores[combination_key]['fact_check_scores'].append(avg_fact_check_score)
+                            progress_text.text(f"진행률: {runs_completed+1}/{total_runs} - {run_id}")
 
-                            if use_gpt_scoring_toggle and eval_docs_used:
-                                    with st.spinner(f"[{run_id}] Combined Scoring 중..."):
- #################################### Metadata 형식 ################################
- # eval_docs_used = 'plant': '상추', 'index': 87, 'file_name': '상추.PDF', 'character_num': 1390
+                            #response 및 score 선언언
+                            eval_response = "오류"
+                            eval_docs_used = []
+                            avg_fact_check_score = None
+                            avg_f1_score = None
+                            combined_scores = None
 
- #평가셋의 형식만 알면 됨.
- #question', 'answer', 'p', 'num', 'no', 'name'를 key로 가짐
- #name과num이 없을 경우 "unrelate"를 저장하도록 함함
+                            try:
+                                with st.spinner(f"[{run_id}] RAG 파이프라인 실행 중..."):
+                                        eval_response, eval_docs_used = run_rag_pipeline(
+                                            question=eval_question, vectorstore=current_vectorstore,
+                                            retriever_k=retriever_k_value, use_reranker=eval_use_reranker_set,
+                                            reranker_method=reranker_method, reranker_top_k=reranker_top_k_value,
+                                            summarize_before_rerank=summarize_before_rerank_toggle,
+                                            llm_model_name=selected_llm, openai_api_key=OPENAI_API_KEY,
+                                            run_id=run_id
+                                        )
 
- #평가셋 청크는 
- #파일이름이 "filtered_plants1.json", "filtered_plants2.json"인 게 평가셋의 name의 FAQ1, FAQ2와 대응
- #PDF(작물.pdf 또는 작물.PDF로 저장)의 plant는 평가셋의의 name에 저장되어 있다.
+                                if use_fact_checker_toggle and eval_docs_used:
+                                        with st.spinner(f"[{run_id}] Fact Checking 중..."):
+                                            sentences = sentence_split(eval_response)
+                                            if sentences:
+                                                avg_fact_check_score, _ = fact_checker(sentences, eval_docs_used, UPSTAGE_API_KEY)
+                                        if avg_fact_check_score is not None:
+                                            # Store for average calculation
+                                            st.session_state.aggregated_scores[combination_key]['fact_check_scores'].append(avg_fact_check_score)
 
- #eval_docs_used에 저장된 파일 이름이 FAQ1 or FAQ2가 아닐 경우, eval_docs_uised의 plant와 index, 그리고 평가셋 청크의 name과 num을 비교해서 다 일치하는게 있으면 True
- #eval_docs_used에 저장된 파일 이름이 FAQ1 or FAQ2일 경우, eval_docs_uised의 file_name과 index, plant와 그리고 평가셋 청크의 name과 num, p를 비교해서 다 일치하는게 있으면 True
+                                if use_gpt_scoring_toggle and eval_docs_used:
+                                        with st.spinner(f"[{run_id}] Combined Scoring 중..."):
+    #################################### Metadata 형식 ################################
+    # eval_docs_used = 'plant': '상추', 'index': 87, 'file_name': '상추.PDF', 'character_num': 1390
 
- #이때 F1 score를 구하여라
+    #평가셋의 형식만 알면 됨.
+    #question', 'answer', 'p', 'num', 'no', 'name'를 key로 가짐
+    #name과num이 없을 경우 "unrelate"를 저장하도록 함함
 
- #그리고 name에 "unrelate"가 있으면 F1 score 계산에서 뺌.
-                                        avg_f1_score = compute_evalset_f1(eval_item, eval_docs_used)
-                                        #avg_f1_score = 1
-                                        if avg_f1_score is not None:
-                                            st.session_state.aggregated_scores[combination_key]['f1_scores'].append(avg_f1_score)
+    #평가셋 청크는 
+    #파일이름이 "filtered_plants1.json", "filtered_plants2.json"인 게 평가셋의 name의 FAQ1, FAQ2와 대응
+    #PDF(작물.pdf 또는 작물.PDF로 저장)의 plant는 평가셋의의 name에 저장되어 있다.
+
+    #eval_docs_used에 저장된 파일 이름이 FAQ1 or FAQ2가 아닐 경우, eval_docs_uised의 plant와 index, 그리고 평가셋 청크의 name과 num을 비교해서 다 일치하는게 있으면 True
+    #eval_docs_used에 저장된 파일 이름이 FAQ1 or FAQ2일 경우, eval_docs_uised의 file_name과 index, plant와 그리고 평가셋 청크의 name과 num, p를 비교해서 다 일치하는게 있으면 True
+
+    #이때 F1 score를 구하여라
+
+    #그리고 name에 "unrelate"가 있으면 F1 score 계산에서 뺌.
+                                            avg_f1_score = compute_evalset_f1(eval_item, eval_docs_used)
+                                            #avg_f1_score = 1
+                                            if avg_f1_score is not None:
+                                                st.session_state.aggregated_scores[combination_key]['f1_scores'].append(avg_f1_score)
+                                            
+                                            context_str = format_docs(eval_docs_used)
+                                            combined_scores = get_combined_score(query=eval_question, response=eval_response, context=context_str, ground_truth=eval_ground_truth, api_key=OPENAI_API_KEY)
                                         
-                                        context_str = format_docs(eval_docs_used)
-                                        combined_scores = get_combined_score(query=eval_question, response=eval_response, context=context_str, ground_truth=eval_ground_truth, api_key=OPENAI_API_KEY)
-                                    
-                                    
-                                    if combined_scores and "Error" not in combined_scores:
-                                        # Store for average calculation
-                                        st.session_state.aggregated_scores[combination_key]['combined_scores'].append(combined_scores)
+                                        
+                                        if combined_scores and "Error" not in combined_scores:
+                                            # Store for average calculation
+                                            st.session_state.aggregated_scores[combination_key]['combined_scores'].append(combined_scores)
 
-                            # Store detailed results for this question regardless of errors in scoring
-                            st.session_state.evaluation_details[combination_key].append({
+                                # Store detailed results for this question regardless of errors in scoring
+                                st.session_state.evaluation_details[combination_key].append({
+                                        "question": eval_question,
+                                        "ground_truth": eval_ground_truth,
+                                        "response": eval_response,
+                                        "fact_check_score": avg_fact_check_score, # May be None
+                                        "combined_scores": combined_scores, # May be None or contain Error
+                                        "used_docs": eval_docs_used
+                                    })
+
+                            except Exception as e:
+                                st.error(f"[{run_id}] 평가 실행 중 오류: {e}")
+                                # Store minimal detail on error
+                                st.session_state.evaluation_details[combination_key].append({
                                     "question": eval_question,
                                     "ground_truth": eval_ground_truth,
-                                    "response": eval_response,
-                                    "fact_check_score": avg_fact_check_score, # May be None
-                                    "combined_scores": combined_scores, # May be None or contain Error
-                                    "used_docs": eval_docs_used
+                                    "response": f"오류 발생: {e}",
+                                    "fact_check_score": None,
+                                    "combined_scores": {"Error": str(e)},
+                                    "used_docs": []
                                 })
+                            finally:
+                                runs_completed += 1
+                                progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0)
 
-                        except Exception as e:
-                            st.error(f"[{run_id}] 평가 실행 중 오류: {e}")
-                            # Store minimal detail on error
-                            st.session_state.evaluation_details[combination_key].append({
-                                "question": eval_question,
-                                "ground_truth": eval_ground_truth,
-                                "response": f"오류 발생: {e}",
-                                "fact_check_score": None,
-                                "combined_scores": {"Error": str(e)},
-                                "used_docs": []
-                            })
-                        finally:
-                            runs_completed += 1
-                            progress_bar.progress(min(1.0, runs_completed / total_runs) if total_runs > 0 else 0.0)
+                        progress_text.text(f"진행률: {runs_completed}/{total_runs} - 조합 완료: Emb: {emb_alias}, Rerank: {reranker_display_name}")
 
-                    progress_text.text(f"진행률: {runs_completed}/{total_runs} - 조합 완료: Emb: {emb_alias}, Rerank: {reranker_display_name}")
+                progress_bar.progress(1.0)
+                progress_text.text(f"평가 완료! 총 {runs_completed}/{total_runs} 실행 완료.")
 
-            progress_bar.progress(1.0)
-            progress_text.text(f"평가 완료! 총 {runs_completed}/{total_runs} 실행 완료.")
-
-            # --- Calculate and Display Average Scores ---
-            st.markdown("---")
-            st.subheader("평가셋 기반 모델 조합별 평균 점수")
+                # --- Calculate and Display Average Scores ---
+                st.markdown("---")
+                st.subheader("평가셋 기반 모델 조합별 평균 점수")
 
 
 
-            avg_results_display = []
-            # Use st.session_state for accessing results
-            for (emb_alias, reranker_name), scores_data in st.session_state.aggregated_scores.items():
-                num_successful_gpt_runs = len([s for s in scores_data.get('combined_scores', []) if s and "Error" not in s])
-                if num_successful_gpt_runs == 0 and not scores_data.get('fact_check_scores'):
-                    avg_results_display.append(f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: 0/{total_questions}) - 결과 없음")
-                    avg_results_display.append("---")
-                    continue
+                avg_results_display = []
+                # Use st.session_state for accessing results
+                for (emb_alias, reranker_name), scores_data in st.session_state.aggregated_scores.items():
+                    num_successful_gpt_runs = len([s for s in scores_data.get('combined_scores', []) if s and "Error" not in s])
+                    if num_successful_gpt_runs == 0 and not scores_data.get('fact_check_scores'):
+                        avg_results_display.append(f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: 0/{total_questions}) - 결과 없음")
+                        avg_results_display.append("---")
+                        continue
 
-                avg_fact_check = np.mean(scores_data['fact_check_scores']) if scores_data['fact_check_scores'] else None
-                avg_f1_score = np.mean(scores_data['f1_scores']) if scores_data['f1_scores'] else None
+                    avg_fact_check = np.mean(scores_data['fact_check_scores']) if scores_data['fact_check_scores'] else None
+                    avg_f1_score = np.mean(scores_data['f1_scores']) if scores_data['f1_scores'] else None
 
-                avg_combined_scores = {}
+                    avg_combined_scores = {}
 
-                if scores_data['combined_scores']:
-                    for s in scores_data['combined_scores']:
-                        first_valid_score = next((s for s in scores_data['combined_scores'] if s and "Error" not in s), None)
-                    
-                    if first_valid_score:
-                            score_keys = first_valid_score.keys()
-                            for key in score_keys:
-                                key_scores = [s[key] for s in scores_data['combined_scores'] if s and "Error" not in s and key in s and s[key] is not None]
-                                if key_scores:
-                                    avg_combined_scores[f"Avg. {key}"] = np.mean(key_scores)
-                                else:
-                                    avg_combined_scores[f"Avg. {key}"] = None
-
-                result_line = f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: {num_successful_gpt_runs}/{total_questions})"
-                avg_results_display.append(result_line)
-
-                if avg_fact_check is not None: avg_results_display.append(f"  - Avg. Fact Check Score: {avg_fact_check:.4f}")
-                if avg_f1_score is not None: avg_results_display.append(f"  - Avg. F1 Score : {avg_f1_score:.4f}")
-                if avg_combined_scores:
-                        for key, avg_val in avg_combined_scores.items():
-                            avg_results_display.append(f"  - {key}: {avg_val:.4f}" if avg_val is not None else f"  - {key}: N/A")
-                 
-                
-                avg_results_display.append("---")
-
-            st.markdown("\n".join(avg_results_display))
-
-            # --- Display Detailed Results ---
-            st.markdown("---")
-            st.subheader("평가셋 기반 모델 조합별 상세 결과")
-
-            # Use st.session_state for accessing details
-            if not st.session_state.evaluation_details:
-                    st.write("상세 결과가 없습니다.")
-            else:
-                    for (emb_alias, reranker_name), details_list in st.session_state.evaluation_details.items():
-                        expander_label = f"Embedding: {emb_alias}, Reranker: {reranker_name} (총 {len(details_list)}개 질문)"
-                        with st.expander(expander_label):
-                            if not details_list:
-                                st.write("이 조합에 대한 결과가 없습니다.")
-                                continue
-
-                            for i, item in enumerate(details_list):
-                                st.markdown(f"**질문 {i+1}:** {item['question']}")
-                                st.markdown(f"**정답:** {item['ground_truth']}")
-                                st.markdown(f"**AI 응답:**")
-                                st.write(item['response']) # Use st.write for potentially long answers
-
-                                # Display scores if available
-                                if item['fact_check_score'] is not None:
-                                    st.caption(f"Fact Check Score: {item['fact_check_score']:.4f}")
-                                
-                                if item['combined_scores'] is not None:
-                                    if "Error" in item['combined_scores']:
-                                        st.error(f"Combined Score Error: {item['combined_scores']['Error']}")
+                    if scores_data['combined_scores']:
+                        for s in scores_data['combined_scores']:
+                            first_valid_score = next((s for s in scores_data['combined_scores'] if s and "Error" not in s), None)
+                        
+                        if first_valid_score:
+                                score_keys = first_valid_score.keys()
+                                for key in score_keys:
+                                    key_scores = [s[key] for s in scores_data['combined_scores'] if s and "Error" not in s and key in s and s[key] is not None]
+                                    if key_scores:
+                                        avg_combined_scores[f"Avg. {key}"] = np.mean(key_scores)
                                     else:
-                                        st.caption("Combined Score:")
-                                        st.json(item['combined_scores'])
+                                        avg_combined_scores[f"Avg. {key}"] = None
 
-                                 # Display
-                                used_docs = item.get('used_docs', [])
-                                st.markdown("---")
-                                if used_docs:
-                                    st.markdown(f"**참고한 문서 ({len(used_docs)}개):**")
-                                    for j, doc in enumerate(used_docs):
-                       
-                                        doc_metadata = getattr(doc, 'metadata', {})
-                                        doc_page_content = getattr(doc, 'page_content', 'N/A')
+                    result_line = f"**Embedding: {emb_alias}, Reranker: {reranker_name}** (성공 질문 수: {num_successful_gpt_runs}/{total_questions})"
+                    avg_results_display.append(result_line)
 
-                                        st.markdown(f"**문서 {j+1}:**")
-                                        st.markdown(f"*출처: {doc_metadata.get('file_name', 'N/A')} (인덱스: {doc_metadata.get('index', 'N/A')})*")
+                    if avg_fact_check is not None: avg_results_display.append(f"  - Avg. Fact Check Score: {avg_fact_check:.4f}")
+                    if avg_f1_score is not None: avg_results_display.append(f"  - Avg. F1 Score : {avg_f1_score:.4f}")
+                    if avg_combined_scores:
+                            for key, avg_val in avg_combined_scores.items():
+                                avg_results_display.append(f"  - {key}: {avg_val:.4f}" if avg_val is not None else f"  - {key}: N/A")
+                    
+                    
+                    avg_results_display.append("---")
 
-                                        # Unique key for the text_area inside
-                                        doc_content_key = f"detail_doc_content_{emb_alias}_{reranker_name}_{i}_{j}"
+                st.markdown("\n".join(avg_results_display))
 
-                                        st.text_area(
-                                            label=f"문서 {j+1} 내용",
-                                            value=doc_page_content,
-                                            height=100,
-                                            key=doc_content_key
-                                        )
-                                    st.markdown("<br>", unsafe_allow_html=True) # 문서 목록 아래에 약간의 공간 추가
-                                else:
-                                    st.markdown("**참고한 문서:** 없음") # 문서가 없을 때 표시
-                                
-                                # st.markdown("---") # Separator between questions
+                # --- Display Detailed Results ---
+                st.markdown("---")
+                st.subheader("평가셋 기반 모델 조합별 상세 결과")
+
+                # Use st.session_state for accessing details
+                if not st.session_state.evaluation_details:
+                        st.write("상세 결과가 없습니다.")
+                else:
+                        for (emb_alias, reranker_name), details_list in st.session_state.evaluation_details.items():
+                            expander_label = f"Embedding: {emb_alias}, Reranker: {reranker_name} (총 {len(details_list)}개 질문)"
+                            with st.expander(expander_label):
+                                if not details_list:
+                                    st.write("이 조합에 대한 결과가 없습니다.")
+                                    continue
+
+                                for i, item in enumerate(details_list):
+                                    st.markdown(f"**질문 {i+1}:** {item['question']}")
+                                    st.markdown(f"**정답:** {item['ground_truth']}")
+                                    st.markdown(f"**AI 응답:**")
+                                    st.write(item['response']) # Use st.write for potentially long answers
+
+                                    # Display scores if available
+                                    if item['fact_check_score'] is not None:
+                                        st.caption(f"Fact Check Score: {item['fact_check_score']:.4f}")
+                                    
+                                    if item['combined_scores'] is not None:
+                                        if "Error" in item['combined_scores']:
+                                            st.error(f"Combined Score Error: {item['combined_scores']['Error']}")
+                                        else:
+                                            st.caption("Combined Score:")
+                                            st.json(item['combined_scores'])
+
+                                    # Display
+                                    used_docs = item.get('used_docs', [])
+                                    st.markdown("---")
+                                    if used_docs:
+                                        st.markdown(f"**참고한 문서 ({len(used_docs)}개):**")
+                                        for j, doc in enumerate(used_docs):
+                        
+                                            doc_metadata = getattr(doc, 'metadata', {})
+                                            doc_page_content = getattr(doc, 'page_content', 'N/A')
+
+                                            st.markdown(f"**문서 {j+1}:**")
+                                            st.markdown(f"*출처: {doc_metadata.get('file_name', 'N/A')} (인덱스: {doc_metadata.get('index', 'N/A')})*")
+
+                                            # Unique key for the text_area inside
+                                            doc_content_key = f"detail_doc_content_{emb_alias}_{reranker_name}_{i}_{j}"
+
+                                            st.text_area(
+                                                label=f"문서 {j+1} 내용",
+                                                value=doc_page_content,
+                                                height=100,
+                                                key=doc_content_key
+                                            )
+                                        st.markdown("<br>", unsafe_allow_html=True) # 문서 목록 아래에 약간의 공간 추가
+                                    else:
+                                        st.markdown("**참고한 문서:** 없음") # 문서가 없을 때 표시
+                                    
+                                    # st.markdown("---") # Separator between questions
 
 # Display results even if the button wasn't clicked in this run (results might be in session state)
 elif st.session_state.evaluation_details:
