@@ -441,7 +441,6 @@ Score Reliability: 5
 
 
 
-
 ##########################   LLM 답변 생성까지의 Pipeline function  ###############################
 
 # 파이프라인 함수 : RAG 실행 및 LLM 답변 생성하는 것 까지 담당 -> streamlit UI에서 LLM 모델 선택하는 부분이 반영되는 곳
@@ -644,7 +643,60 @@ def compute_evalset_f1(
     return f1_score(y_true, y_pred)
 
 
+def query_reformulation(query_db, question, turn_num):
+    """
+    이전 질문과 새 질문을 고려해 최종 사용할 질문을 LLM으로 재작성.
+    
+    Parameters:
+    - query_db (list[str]): 이전 질문들. 가장 최근 질문은 마지막에 위치
+    - question (str): 새로 들어온 사용자 질문
+    - api_key (str): OpenAI API Key
 
+    Returns:
+    - str: 재작성된 질문 (또는 그대로 반환)
+    """
+    
+    #turn_num equal to number of query
+    previous_query = query_db[turn_num-2]
+    current_query = question
+    print(previous_query)
+    print(current_query)
+
+    # 프롬프트 문자열 직접 작성
+    prompt_text = f"""
+    당신은 다중 턴 사용자 질의 흐름을 이해하는 AI 어시스턴트입니다.
+    사용자가 이전에 했던 질문과 지금 입력한 질문을 참고하여,
+    지금 입력한 질문이 어떤 종류의 질문인지 파악하세요요
+
+    만약 이어지는 질문이라면, 이전 질문의 문맥에 대답할 내용에 이어지는 질문으로 자연스럽게 재작성하세요. 단, 이전 질문의 필수 요소는 들어가야 합니다.
+    예시 : "배추의 주요 병충해는 무엇이있나요","특정 병원균은 어떤 것이 있나요"의 경우 "배추 병충해를 일으키는 특정 병원균은 어떤 것이 있나요"로 재작성
+    
+    만약 이전 질문이 정보가 부족한 질문이었다면, 현재 질문의 정보를 추가하여 재작성하세요
+    예시 : "배추","물러요"의 경우 "배추가 물러요"로 재작성
+    
+    만약 독립적인 질문이라면 그대로 사용하세요.
+    예시 : "배추 재배방법을 알려주세요", "고구마가 물러요"의 경우 "고구마가 물러요"를 이용
+
+    이전 질문:
+    {previous_query}
+
+    현재 질문:
+    {current_query}
+
+    재생성된된 질문:
+    """
+
+    # LLM 객체 정의
+    llm = ChatOpenAI(
+        model="gpt-3.5-turbo",
+        temperature=0,
+        openai_api_key=OPENAI_API_KEY,
+        max_tokens=256  #optional
+    )
+
+    
+    response = llm.invoke([HumanMessage(content=prompt_text)])
+    return response.content.strip()
 
 ##########################  Streamli UI  #################################
 
@@ -712,7 +764,7 @@ use_gpt_scoring_toggle = st.sidebar.checkbox(
 
 
 
-###############################     메인 코드     #################################
+###############################     Main     #################################
 
 # --------- Main Area ---------
 st.caption(f"현재 설정 | Embedding: {selected_embedding_alias} | Reranker: {'사용 안 함' if not use_reranker_default else selected_reranker_method_default} | LLM: {selected_llm}")
@@ -727,12 +779,36 @@ def get_cached_vector_store(alias, key):
 
 vectorstore = get_cached_vector_store(selected_embedding_alias, OPENAI_API_KEY)
 
+# Initialization
+if "query_db" not in st.session_state:
+    st.session_state.query_db = []
+if "turn_num" not in st.session_state:
+    st.session_state.turn_num = 0
+
 if vectorstore:
-    # Question Input
+    #do not set multiturn in here, set in rag_pipline function.
+    #turn 수 증가
+        
+
+    #Question Input
+    #Set text input key for avoid ID redaundant
     question = st.text_input("질문을 입력하세요:", placeholder="예: 배추의 주요 병충해는 무엇인가요?")
+
+    
+
+    if st.button("새 프로젝트로 리셋") : 
+        st.session_state.query_db = []
+        st.session_state.turn_num = 0
 
     # --- Single Run Button ---
     if st.button("질문하기 (현재 설정 사용)") and question:
+        #If question available, add query to query_db and increase number of turn
+        st.session_state.query_db.append(question)
+        st.session_state.turn_num += 1
+
+        if st.session_state.turn_num > 1 : 
+            question = query_reformulation(st.session_state.query_db, question, st.session_state.turn_num)
+
         st.markdown("---")
         st.header("단일 실행 결과")
         final_response = "오류: 처리 중 문제 발생"
@@ -748,24 +824,24 @@ if vectorstore:
             if use_fact_checker_toggle: cost_flags.append("Upstage FactCheck")
             if use_gpt_scoring_toggle: cost_flags.append("OpenAI Scoring")
             if cost_flags:
-                 st.info(f"API 비용 발생 가능: {', '.join(cost_flags)}")
+                st.info(f"API 비용 발생 가능: {', '.join(cost_flags)}")
             
             
             # 실험용 CoT 출력
-            query_chain = build_user_query_prompt_chain()
-            streamed = stream_final_answer_only(query_chain, question)
+            # query_chain = build_user_query_prompt_chain()
+            # streamed = stream_final_answer_only(query_chain, question)
 
-            st.markdown("### 🌱 프롬프트 기반 GPT 응답:")
+            # st.markdown("### 🌱 프롬프트 기반 GPT 응답:")
 
-            response_placeholder = st.empty()  # 빈 공간 하나 만들고
-            response_text = ""
- 
-            for token in streamed:
-                response_text += token
-                response_placeholder.markdown(response_text)
+            # response_placeholder = st.empty()  # 빈 공간 하나 만들고
+            # response_text = ""
+
+            # for token in streamed:
+            #     response_text += token
+            #     response_placeholder.markdown(response_text)
             # ------------------------------------------------
 
-
+            
             with st.spinner("RAG 파이프라인 실행 중..."):
                 final_response, final_docs_used = run_rag_pipeline(
                     question=question,
@@ -781,55 +857,61 @@ if vectorstore:
 
             # --- Optional: Fact Checking ---
             if use_fact_checker_toggle and final_docs_used:
-                 with st.spinner("4. Fact Checking 중... (Upstage API)"):
-                     sentences = sentence_split(final_response)
-                     if sentences: # Only run if there are sentences
-                         average_score, _ = fact_checker(sentences, final_docs_used, UPSTAGE_API_KEY)
-                         st.info(f"Fact Check Score: {average_score:.4f}")
+                with st.spinner("4. Fact Checking 중... (Upstage API)"):
+                    sentences = sentence_split(final_response)
+                    if sentences: # Only run if there are sentences
+                        average_score, _ = fact_checker(sentences, final_docs_used, UPSTAGE_API_KEY)
+                        st.info(f"Fact Check Score: {average_score:.4f}")
 
-                         # Rewrite logic based on score (Uses OpenAI API)
-                         if (average_score > 0.3) & (average_score < 0.7):
-                             st.warning("Fact Check 점수가 낮아 질문을 재작성하여 다시 시도합니다. (OpenAI API 사용)")
-                             rewritten_question = rewrite_question_single(question, api_key=OPENAI_API_KEY)
-                             if rewritten_question != question: # Check if rewrite actually happened
-                                 st.write(f"   재작성된 질문: {rewritten_question}")
-                                 with st.spinner("재작성된 질문으로 RAG 파이프라인 재실행 중..."):
-                                     # Re-run the pipeline with the rewritten question
-                                     final_response, final_docs_used = run_rag_pipeline(
-                                         question=rewritten_question, # Use rewritten question here
-                                         vectorstore=vectorstore,
-                                         retriever_k=retriever_k_value,
-                                         use_reranker=use_reranker_default,
-                                         reranker_method=selected_reranker_method_default,
-                                         reranker_top_k=reranker_top_k_value,
-                                         summarize_before_rerank=summarize_before_rerank_toggle,
-                                         llm_model_name=selected_llm,
-                                         openai_api_key=OPENAI_API_KEY,
-                                         run_id="Rewrite" # Add identifier
-                                     )
-                                     # Optionally re-run fact-checker on the new response?
-                             else:
+                        # Rewrite logic based on score (Uses OpenAI API)
+                        if (average_score > 0.3) & (average_score < 0.7):
+                            st.warning("Fact Check 점수가 낮아 질문을 재작성하여 다시 시도합니다. (OpenAI API 사용)")
+                            rewritten_question = rewrite_question_single(question, api_key=OPENAI_API_KEY)
+                            if rewritten_question != question: # Check if rewrite actually happened
+                                st.write(f"   재작성된 질문: {rewritten_question}")
+                                with st.spinner("재작성된 질문으로 RAG 파이프라인 재실행 중..."):
+                                    # Re-run the pipeline with the rewritten question
+                                    final_response, final_docs_used = run_rag_pipeline(
+                                        question=rewritten_question, # Use rewritten question here
+                                        vectorstore=vectorstore,
+                                        retriever_k=retriever_k_value,
+                                        use_reranker=use_reranker_default,
+                                        reranker_method=selected_reranker_method_default,
+                                        reranker_top_k=reranker_top_k_value,
+                                        summarize_before_rerank=summarize_before_rerank_toggle,
+                                        llm_model_name=selected_llm,
+                                        openai_api_key=OPENAI_API_KEY,
+                                        run_id="Rewrite" # Add identifier
+                                    )
+                                    # Optionally re-run fact-checker on the new response?
+                            else:
                                 st.warning("   질문 재작성에 실패했습니다. 원본 질문 결과를 사용합니다.")
-                     else:
-                          st.write("   Fact Check 점수가 임계치 범위 밖이거나 양호합니다.")
-                     # Display final fact check score if calculated
-                     if average_score is not None:
-                          st.caption(f"Upstage Fact Check 평균 점수: {average_score:.4f}")
+                    else:
+                        st.write("   Fact Check 점수가 임계치 범위 밖이거나 양호합니다.")
+                    # Display final fact check score if calculated
+                    if average_score is not None:
+                        st.caption(f"Upstage Fact Check 평균 점수: {average_score:.4f}")
 
-            # Display Final Results
+            #Display Final Results
             st.markdown("### AI 응답:")
             st.write(final_response)
+
+            #Check for Query reformulation
+            # st.markdown("### Query 재생성")
+            # st.write(question)
+            # st.write(st.session_state.turn_num)
+
 
             # --- Optional: GPT Scoring ---
             if use_gpt_scoring_toggle and final_docs_used:
                 with st.spinner(f"5. GPT Scoring 중... ({DEFAULT_GPT_SCORING_MODEL})"):
-                     #이거 이전에 F1 score 뽑아야 한다.
-                     
-                     context_str_for_scoring = format_docs(final_docs_used)
-                     
-                     combined_scores = get_combined_score(question, final_response, context_str_for_scoring,"예시시", OPENAI_API_KEY)
-                     st.markdown("### GPT 평가 점수:")
-                     st.json(combined_scores) # Display scores as JSON
+                    #이거 이전에 F1 score 뽑아야 한다.
+                    
+                    context_str_for_scoring = format_docs(final_docs_used)
+                    
+                    combined_scores = get_combined_score(question, final_response, context_str_for_scoring,"예시시", OPENAI_API_KEY)
+                    st.markdown("### GPT 평가 점수:")
+                    st.json(combined_scores) # Display scores as JSON
 
             # Show context documents used for the final answer
             with st.expander("참고한 문서 (최종 답변 생성에 사용됨)"):
@@ -877,9 +959,9 @@ if vectorstore:
 
         # Create combinations
         if not eval_embeddings:
-             st.warning("평가를 위해 최소 하나 이상의 임베딩 모델을 선택해야 합니다.")
+            st.warning("평가를 위해 최소 하나 이상의 임베딩 모델을 선택해야 합니다.")
         elif eval_use_reranker and not eval_rerankers:
-             st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
+            st.warning("reranker 사용이 선택되었으나, 평가할 reranker 모델이 선택되지 않았습니다.")
         else:
             # Determine reranker list: either selected ones or [None] if not using reranker
             reranker_list_to_iterate = eval_rerankers if eval_use_reranker else [None]
@@ -889,112 +971,112 @@ if vectorstore:
 
             # Loop through combinations
             for emb_alias in eval_embeddings:
-                 # Load vector store for this embedding model (use caching)
-                 current_vectorstore = get_cached_vector_store(emb_alias, OPENAI_API_KEY)
-                 if not current_vectorstore:
-                     st.error(f"평가 중단: '{emb_alias}' 벡터 DB 로드 실패.")
-                     evaluation_results.append({
-                         "Embedding": emb_alias, "Reranker": "N/A", "Response": "Vectorstore Load Failed",
-                         "Fact Check Score": None, "Combined Score": None, "Used Docs": []
-                     })
-                     continue # Skip to next embedding model
+                # Load vector store for this embedding model (use caching)
+                current_vectorstore = get_cached_vector_store(emb_alias, OPENAI_API_KEY)
+                if not current_vectorstore:
+                    st.error(f"평가 중단: '{emb_alias}' 벡터 DB 로드 실패.")
+                    evaluation_results.append({
+                        "Embedding": emb_alias, "Reranker": "N/A", "Response": "Vectorstore Load Failed",
+                        "Fact Check Score": None, "Combined Score": None, "Used Docs": []
+                    })
+                    continue # Skip to next embedding model
 
-                 for reranker_method in reranker_list_to_iterate:
-                     reranker_display_name = '사용 안 함' if not eval_use_reranker or reranker_method is None else reranker_method
-                     run_id = f"Emb: {emb_alias}, Rerank: {reranker_display_name}"
-                     st.subheader(f"평가 실행 중: {run_id}")
+                for reranker_method in reranker_list_to_iterate:
+                    reranker_display_name = '사용 안 함' if not eval_use_reranker or reranker_method is None else reranker_method
+                    run_id = f"Emb: {emb_alias}, Rerank: {reranker_display_name}"
+                    st.subheader(f"평가 실행 중: {run_id}")
 
-                     try:
-                         # Cost flags for this specific run
-                         run_cost_flags = []
-                         if emb_alias == 'openai': run_cost_flags.append("OpenAI Emb")
-                         if summarize_before_rerank_toggle: run_cost_flags.append("OpenAI Sum")
-                         if selected_llm.startswith('gpt'): run_cost_flags.append(f"OpenAI LLM")
-                         if use_fact_checker_toggle: run_cost_flags.append("Upstage FC")
-                         if use_gpt_scoring_toggle: run_cost_flags.append("OpenAI Score")
-                         if run_cost_flags:
-                             st.caption(f"API 비용 발생 가능: {', '.join(run_cost_flags)}")
-
-
-                         with st.spinner(f"[{run_id}] RAG 파이프라인 실행 중..."):
-                             # Use the core pipeline function
-                             eval_response, eval_docs_used = run_rag_pipeline(
-                                 question=question,
-                                 vectorstore=current_vectorstore,
-                                 retriever_k=retriever_k_value, # Use sidebar value
-                                 use_reranker=eval_use_reranker, # Specific to eval run
-                                 reranker_method=reranker_method, # Current reranker in loop
-                                 reranker_top_k=reranker_top_k_value, # Use sidebar value
-                                 summarize_before_rerank=summarize_before_rerank_toggle, # Use sidebar value
-                                 llm_model_name=selected_llm, # Use sidebar value
-                                 openai_api_key=OPENAI_API_KEY,
-                                 run_id=run_id
-                             )
-
-                         # Optional Fact-Checking for each result (use main toggle)
-                         avg_fact_check_score = None
-                         if use_fact_checker_toggle and eval_docs_used:
-                             with st.spinner(f"[{run_id}] Fact Checking 중... (Upstage API)"):
-                                 sentences = sentence_split(eval_response)
-                                 if sentences:
-                                     avg_fact_check_score, _ = fact_checker(sentences, eval_docs_used, UPSTAGE_API_KEY)
-
-                         # Optional GPT Scoring for each result (use main toggle)
-                         combined_scores = None
-                         if use_gpt_scoring_toggle and eval_docs_used:
-                             with st.spinner(f"[{run_id}] GPT Scoring 중... (OpenAI API)"):
-                                 context_str = format_docs(eval_docs_used)
-                                 
-                                 combined_scores = get_combined_score(question, eval_response, context_str,"예시시", OPENAI_API_KEY)
+                    try:
+                        # Cost flags for this specific run
+                        run_cost_flags = []
+                        if emb_alias == 'openai': run_cost_flags.append("OpenAI Emb")
+                        if summarize_before_rerank_toggle: run_cost_flags.append("OpenAI Sum")
+                        if selected_llm.startswith('gpt'): run_cost_flags.append(f"OpenAI LLM")
+                        if use_fact_checker_toggle: run_cost_flags.append("Upstage FC")
+                        if use_gpt_scoring_toggle: run_cost_flags.append("OpenAI Score")
+                        if run_cost_flags:
+                            st.caption(f"API 비용 발생 가능: {', '.join(run_cost_flags)}")
 
 
-                         evaluation_results.append({
-                             "Embedding": emb_alias,
-                             "Reranker": reranker_display_name,
-                             "Response": eval_response,
-                             "Fact Check Score": avg_fact_check_score,
-                             "Combined Score": combined_scores,
-                             "Used Docs": eval_docs_used
-                         })
-                         st.success(f"[{run_id}] 완료.")
+                        with st.spinner(f"[{run_id}] RAG 파이프라인 실행 중..."):
+                            # Use the core pipeline function
+                            eval_response, eval_docs_used = run_rag_pipeline(
+                                question=question,
+                                vectorstore=current_vectorstore,
+                                retriever_k=retriever_k_value, # Use sidebar value
+                                use_reranker=eval_use_reranker, # Specific to eval run
+                                reranker_method=reranker_method, # Current reranker in loop
+                                reranker_top_k=reranker_top_k_value, # Use sidebar value
+                                summarize_before_rerank=summarize_before_rerank_toggle, # Use sidebar value
+                                llm_model_name=selected_llm, # Use sidebar value
+                                openai_api_key=OPENAI_API_KEY,
+                                run_id=run_id
+                            )
 
-                     except Exception as e:
-                         st.error(f"[{run_id}] 평가 실행 중 오류: {e}")
-                         evaluation_results.append({
-                             "Embedding": emb_alias,
-                             "Reranker": reranker_display_name,
-                             "Response": f"오류 발생: {e}",
-                             "Fact Check Score": None,
-                             "Combined Score": None,
-                             "Used Docs": []
-                         })
+                        # Optional Fact-Checking for each result (use main toggle)
+                        avg_fact_check_score = None
+                        if use_fact_checker_toggle and eval_docs_used:
+                            with st.spinner(f"[{run_id}] Fact Checking 중... (Upstage API)"):
+                                sentences = sentence_split(eval_response)
+                                if sentences:
+                                    avg_fact_check_score, _ = fact_checker(sentences, eval_docs_used, UPSTAGE_API_KEY)
+
+                        # Optional GPT Scoring for each result (use main toggle)
+                        combined_scores = None
+                        if use_gpt_scoring_toggle and eval_docs_used:
+                            with st.spinner(f"[{run_id}] GPT Scoring 중... (OpenAI API)"):
+                                context_str = format_docs(eval_docs_used)
+                                
+                                combined_scores = get_combined_score(question, eval_response, context_str,"예시시", OPENAI_API_KEY)
+
+
+                        evaluation_results.append({
+                            "Embedding": emb_alias,
+                            "Reranker": reranker_display_name,
+                            "Response": eval_response,
+                            "Fact Check Score": avg_fact_check_score,
+                            "Combined Score": combined_scores,
+                            "Used Docs": eval_docs_used
+                        })
+                        st.success(f"[{run_id}] 완료.")
+
+                    except Exception as e:
+                        st.error(f"[{run_id}] 평가 실행 중 오류: {e}")
+                        evaluation_results.append({
+                            "Embedding": emb_alias,
+                            "Reranker": reranker_display_name,
+                            "Response": f"오류 발생: {e}",
+                            "Fact Check Score": None,
+                            "Combined Score": None,
+                            "Used Docs": []
+                        })
 
             # Display all eval results
             st.markdown("---")
             st.subheader("종합 평가 결과 요약")
             for i, result in enumerate(evaluation_results):
-                 st.markdown(f"**{i+1}. Embedding: {result['Embedding']}, Reranker: {result['Reranker']}**")
-                 st.markdown(f"**응답:**")
-                 st.write(result['Response'])
-                 if result['Fact Check Score'] is not None:
-                     st.caption(f"Fact Check Score: {result['Fact Check Score']:.4f}")
-                 if result['Combined Score'] is not None:
-                     st.caption(f"Combined Score:")
-                     st.json(result['Combined Score']) # Show GPT scores if available
-                 with st.expander(f"사용된 문서 ({len(result['Used Docs'])}개)"):
-                     if result['Used Docs']:
-                         # Add index 'j' for the inner loop for unique keys
-                         for j, doc in enumerate(result['Used Docs']):
-                             st.markdown(f"**문서 {j+1}:**")
-                             st.markdown(f"*출처: {doc.metadata.get('file_name', 'N/A')} (인덱스: {doc.metadata.get('index', 'N/A')})*")
-                             st.text_area(
-                                 label=f"문서 {j+1} 내용", # index
-                                 value=doc.page_content,
-                                 height=150,
-                                 key=f"eval_doc_{i}_{j}" # unique key (결과 index i + 문서 index j)
-                             )
-                     else:
-                         st.write("사용된 문서가 없습니다.")
+                st.markdown(f"**{i+1}. Embedding: {result['Embedding']}, Reranker: {result['Reranker']}**")
+                st.markdown(f"**응답:**")
+                st.write(result['Response'])
+                if result['Fact Check Score'] is not None:
+                    st.caption(f"Fact Check Score: {result['Fact Check Score']:.4f}")
+                if result['Combined Score'] is not None:
+                    st.caption(f"Combined Score:")
+                    st.json(result['Combined Score']) # Show GPT scores if available
+                with st.expander(f"사용된 문서 ({len(result['Used Docs'])}개)"):
+                    if result['Used Docs']:
+                        # Add index 'j' for the inner loop for unique keys
+                        for j, doc in enumerate(result['Used Docs']):
+                            st.markdown(f"**문서 {j+1}:**")
+                            st.markdown(f"*출처: {doc.metadata.get('file_name', 'N/A')} (인덱스: {doc.metadata.get('index', 'N/A')})*")
+                            st.text_area(
+                                label=f"문서 {j+1} 내용", # index
+                                value=doc.page_content,
+                                height=150,
+                                key=f"eval_doc_{i}_{j}" # unique key (결과 index i + 문서 index j)
+                            )
+                    else:
+                        st.write("사용된 문서가 없습니다.")
 
 
 
@@ -1287,6 +1369,10 @@ if vectorstore:
                                         st.markdown("**참고한 문서:** 없음") # 문서가 없을 때 표시
                                     
                                     # st.markdown("---") # Separator between questions
+        
+    
+  
+    
 
 # Display results even if the button wasn't clicked in this run (results might be in session state)
 elif st.session_state.evaluation_details:
