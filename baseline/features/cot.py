@@ -1,24 +1,25 @@
-from dotenv import load_dotenv
+# RAG/baseline/features/cot.py
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts.few_shot import FewShotPromptTemplate
 from langchain_core.prompts import PromptTemplate
 from langchain_core.example_selectors import SemanticSimilarityExampleSelector
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS # Use for example_selector
 
-load_dotenv()
+from config import OPENAI_API_KEY, LANGSMITH_TRACING_ENABLED, LANGCHAIN_PROJECT
 
-def build_user_query_prompt_chain():
-    # LLM 객체 생성
-    llm = ChatOpenAI(
-        temperature=0,
-        model_name="gpt-4-turbo",
-    )
+# LangSmith 설정 (build_user_query_prompt_chain에서 LLM 생성 시 콜백 전달)
+CALLBACKS_COT = []
+if LANGSMITH_TRACING_ENABLED:
+    from langchain.callbacks.tracers.langchain import LangChainTracer
+    TRACER_COT = LangChainTracer(project_name=f"{LANGCHAIN_PROJECT}-CoT")
+    CALLBACKS_COT = [TRACER_COT]
 
-    # Few-shot 예시
-    disease_pest_examples = [ # 병해충 예시
-    	{
-        	"question": "얼갈이배추가 발아 초기는 괜찮다가 크면서 잎이 오그라들고 시들어 죽기도 하구요. 주변으로 번집니다. 같은 밭에서 날이 더워지면 발생합니다.?",
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+
+# Few-shot 예시 데이터
+disease_pest_examples = [
+    {
+        "question": "얼갈이배추가 발아 초기는 괜찮다가 크면서 잎이 오그라들고 시들어 죽기도 하구요. 주변으로 번집니다. 같은 밭에서 날이 더워지면 발생합니다.?",
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 잎이 시들고 오그라들며 죽는 증상이 어떤 병과 관련 있을까요?
 중간 답변: 상기 증상은 시들음병(위황병)으로 생각됩니다.
@@ -39,10 +40,10 @@ def build_user_query_prompt_chain():
 병든 포기는 일찍 제거하고 수확 후 병든 잔재물이 포장에 남아있지 않도록 완전히 수거하여 제거하도록 합니다. 
 토양소독을 하는 방법도 있으나 다른 작물로 돌려짓기를 하여 토양을 좋게 하는 것이 효과적입니다.
 """,
-    	},
-    	{
-        	"question": "종서 이식 후 발아가 안 됨. 발아율 50% 정도. 종서 썩음.",
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+    },
+    {
+        "question": "종서 이식 후 발아가 안 됨. 발아율 50% 정도. 종서 썩음.",
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 감자를 절단한 후 이식했는데 발아가 잘 되지 않는 원인이 뭘까요?  
 중간 답변: 감자를 절단 후 바로 이식하면 절단면의 상처가 치유되지 않은 상태이기 때문에 병원균에 쉽게 감염될 수 있습니다.
@@ -78,13 +79,13 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 
 또한, 절단한 씨감자는 만코젭 수화제(제품명: 다에신엠45)나 흑지병 방제용 약제로 소독해 주면, 절단면으로 곰팡이가 침입할 가능성을 줄이는 데 도움이 됩니다.
  """,
-    	},
-    	{
-        	"question": """아침 배달받은 양상추를 스텐 칼로 반을 절단하니 가운데가 하얗고 초록인게 아니고 투명해져있고 색깔도 누랬습니다.
+    },
+    {
+        "question": """아침 배달받은 양상추를 스텐 칼로 반을 절단하니 가운데가 하얗고 초록인게 아니고 투명해져있고 색깔도 누랬습니다.
 스텐 칼을 이용해 절단했지만 바로 저런 상태가 되지는 않지 않나요?
 업체에서는 스텐 칼 사용해서 그렇고 속이 꽉차면 저렇게 육질이 투명하게 바뀐다는데 양상추가 어떤 상태인지 확인 부탁드립니다.
 """,
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 양상추 속이 투명하고 누렇게 변한 것은 병해 때문인가요?  
 중간 답변: 아니요, 병원균에 의한 증상은 아닙니다.
@@ -106,13 +107,12 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 양상추 속이 투명하고 일부 갈변된 증상은 병원균이나 칼 때문이 아니라, 고온에 따른 생리장해로 판단됩니다.  
 고온으로 인해 광합성 산물 소모가 많고, 칼슘 흡수 부족이 겹쳐 생긴 현상으로 식용해도 인체에 무해합니다.
 """,
-    	},
-	]
-
-    general_examples = [ # 일반적인 질문 예시
-    	{
-        	"question": "씨마늘 소독방법을 알려주시면 감사하겠습니다.",
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+    },
+]
+general_examples = [
+    {
+        "question": "씨마늘 소독방법을 알려주시면 감사하겠습니다.",
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 씨마늘을 파종하기 전 소독이 필요한가요?  
 중간 답변: 네, 병해충 예방을 위해 씨마늘 파종 전 소독이 필요합니다.
@@ -133,10 +133,10 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 씨마늘 소독은 파종 1일 전에 벤레이트티 500배액과 디메토유제 1,000배액을 혼용한 용액에 씨마늘을 1시간 담갔다가, 그늘에 말린 후 파종하는 방식으로 진행합니다.
 약제를 사용할 때는 반드시 주의사항을 준수하세요.
 """,
-    	},
-    	{
-        	"question": "마늘의 일반적 학명이 Allium sativum Linneaus. for. pekinense MAKINO 라고 알고 있는데 이게 마늘의 종류에 따라서 달라지더라고요. 예를 들어 난지형 마늘 중 코끼리 마늘은 Allium ampeloprasum 라는 학명으로 쓰는데 난지형 마늘 중 스페인종자 마늘의 학명을 알고 싶습니다.",
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+    },
+    {
+        "question": "마늘의 일반적 학명이 Allium sativum Linneaus. for. pekinense MAKINO 라고 알고 있는데 이게 마늘의 종류에 따라서 달라지더라고요. 예를 들어 난지형 마늘 중 코끼리 마늘은 Allium ampeloprasum 라는 학명으로 쓰는데 난지형 마늘 중 스페인종자 마늘의 학명을 알고 싶습니다.",
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 마늘의 일반적인 학명은 무엇인가요?  
 중간 답변: 마늘은 일반적으로 ‘Allium sativum L.’로 분류됩니다.
@@ -163,14 +163,14 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 파종기는 9월 중순경이고 수확기는 5월 중순경으로 난지형 중에서도 조생종에 속합니다. 
 대서마늘로 명명되었으며, 대서마늘의 학명은 ‘Allium sativum L.’입니다.
 """,
-    	},
-    	{
-        	"question": """다름이 아니오라 본인은 경북 청도 소재지 본인 밭에 당뇨 등 건강에 좋다는 돼지감자를 3년 전에 10kg 한박스를 구입하여 파종하여 2년여 동안 수확 한 적이 있습니다. 문제는 삽으로 땅을 뒤집으며 돼지감자를 다 수확 하였다고 보았는데 수확하면서 떨어져나간 돼지감자 파편 모두에게서 이듬해 돼지감자 싹이 올라와 1,000㎡의 밭이 전부 돼지감자 천지가 되어 다른 작물을 전혀 심을 수 없다는 것입니다.
+    },
+    {
+        "question": """다름이 아니오라 본인은 경북 청도 소재지 본인 밭에 당뇨 등 건강에 좋다는 돼지감자를 3년 전에 10kg 한박스를 구입하여 파종하여 2년여 동안 수확 한 적이 있습니다. 문제는 삽으로 땅을 뒤집으며 돼지감자를 다 수확 하였다고 보았는데 수확하면서 떨어져나간 돼지감자 파편 모두에게서 이듬해 돼지감자 싹이 올라와 1,000㎡의 밭이 전부 돼지감자 천지가 되어 다른 작물을 전혀 심을 수 없다는 것입니다.
 그 조밀함과 큰 키로 인해 다른 작물은 아예 돼지감자 속에서 자라지 못하게 하는 그 번식력은 상상을 초월하여 다른 작물을 재배하여야 하는 본인으로서 매우 난감한 처지에 처했습니다.
 처음 씨 돼지감자 생산자에게 물어본바 “식물전면약 근사미도 안되더라”며 “그거 곤란한데요”라고만 연발하여 뾰족한 방법을 찾지 못하고 있습니다.
 이대로 두면 점점 더 퍼져나가 온 밭이 돼지감자 천지가 될 것 같은데 바쁘시겠지만좋은방법을 찾아 주시면 매우 감사 하겠습니다.
 """,
-        	"answer": """이 질문에 추가 질문이 필요한가요: 예.
+        "answer": """이 질문에 추가 질문이 필요한가요: 예.
 
 추가 질문: 돼지감자가 해마다 다시 자라는 이유는 무엇인가요?  
 중간 답변: 돼지감자는 괴경(덩이뿌리)으로 번식하며, 땅속에 남은 파편의 씨눈에서도 다시 발아합니다.
@@ -195,13 +195,12 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 이행성 제초제인 근사미 등을 싹이 무성한 시기에 2~3회 반복적으로 살포해야 하며, 약제량은 일반 잡초보다 약 1.5배 높게 사용하는 것이 좋습니다. 
 근사미는 토양 내에서 빠르게 분해되므로, 이후 다른 작물 재배에는 영향을 주지 않습니다.
 """,
-    	},
-	]
-
-    negative_examples = [ # 문서 외 질문 예시
-    	{
-        	"question": "오늘의 날씨는 어떤가요?",
-        	"answer": """이 질문에 추가 설명이 필요한가요: 예.
+    },
+]
+negative_examples = [
+    {
+        "question": "오늘의 날씨는 어떤가요?",
+        "answer": """이 질문에 추가 설명이 필요한가요: 예.
 
 추가 설명: 지금 질문은 실시간 날씨에 대한 정보 요청인가요?
 중간 판단: 그렇습니다. 사용자는 현재 기상 상황을 알고 싶어합니다.
@@ -216,10 +215,10 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 저는 병해충 진단과 농작물 재배에 관한 정보만을 제공하며, 실시간 날씨 정보는 제공하지 않습니다. 
 기상청이나 날씨 앱을 참고하시길 바랍니다.
 """,
-    	},
-    	{
-        	"question": "현재 미국 대통령이 누구인가요?",
-        	"answer": """이 질문에 추가 설명이 필요한가요: 예.
+    },
+    {
+        "question": "현재 미국 대통령이 누구인가요?",
+        "answer": """이 질문에 추가 설명이 필요한가요: 예.
 
 추가 설명: 이 질문은 인물에 대한 정보 요청인가요?
 중간 판단: 네, 사용자 의도는 정치 인물 지식을 얻는 것입니다.
@@ -231,10 +230,10 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 저는 병해충 진단과 농작물 재배 관련 정보만 제공하고 있습니다. 
 인물 정보는 포털 사이트를 참고해 주시길 바랍니다.
 """,
-    	},
-    	{
-        	"question": "토마토 10개와 고추 4개가 있다. 이 채소들을 2명의 사람에게 공정하게 나누어 주려고 한다. 이때, 최선의 방법은 무엇인가? ",
-        	"answer": """이 질문에 추가 설명이 필요한가요: 예.
+    },
+    {
+        "question": "토마토 10개와 고추 4개가 있다. 이 채소들을 2명의 사람에게 공정하게 나누어 주려고 한다. 이때, 최선의 방법은 무엇인가? ",
+        "answer": """이 질문에 추가 설명이 필요한가요: 예.
 
 추가 질문: 이 질문은 어떤 정보를 묻고 있나요?  
 중간 판단: 토마토와 고추를 두 사람에게 공정하게 나누는 방법에 대한 수학적/논리적 문제입니다.
@@ -248,27 +247,17 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 최종 답변은:  🙏 안내드립니다  
 저는 토마토, 고추를 포함한 농산물의 재배 및 병해충 정보만을 제공하고 있으며, 수학적 분배나 일반적인 논리 퍼즐에 대한 답변은 제공하지 않습니다.
 """
-    	},
-	]
+    },
+]
+examples = disease_pest_examples + general_examples + negative_examples
 
+# 예시 프롬프트 템플릿
+example_prompt = PromptTemplate.from_template(
+    "Question:\n{question}\nAnswer:\n{answer}"
+)
 
-    examples = disease_pest_examples + general_examples + negative_examples
-
-    # 예시 프롬프트 템플릿
-    example_prompt = PromptTemplate.from_template(
-        "Question:\n{question}\nAnswer:\n{answer}"
-    )
-
-    # 의미 기반 예시 선택
-    example_selector = SemanticSimilarityExampleSelector.from_examples(
-        examples, # 선택 가능한 예시 목록
-        OpenAIEmbeddings(), # 임베딩 클래스 (의미적 유사성 측정)
-        vectorstore_cls=FAISS, # 벡터저장소 클래스 (유사성 검색)
-        k=1 # 생성할 예시의 수
-    )
-
-    # LLM에게 가이드를 주는 Prefix
-    prefix = """당신은 농업 전문가입니다.  
+# LLM에게 가이드를 주는 Prefix
+prefix = """당신은 농업 전문가입니다.  
 사용자의 질문을 논리적으로 분석하고, 문제를 진단하며, 단계적으로 해결 방안을 제시하세요.  
 질문 유형에 따라 아래와 같은 형식을 따르세요:
 
@@ -294,6 +283,30 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
 ※ 최종 출력은 사용자에게 제공되는 응답이며, 자연스럽고 구체적으로 서술하세요.
 """
 
+
+def build_user_query_prompt_chain(llm_model_name: str = "gpt-4-turbo"):
+    """
+    CoT(Chain-of-Thought) 기반 프롬프트 체인을 구성합니다.
+    llm_model_name: 사용할 LLM 모델 이름
+    """
+    if not OPENAI_API_KEY:
+        raise ValueError("OpenAI API 키가 설정되지 않았습니다. CoT 체인을 빌드할 수 없습니다.")
+
+    llm = ChatOpenAI(
+        temperature=0,
+        model_name=llm_model_name,
+        openai_api_key=OPENAI_API_KEY,
+        callbacks=CALLBACKS_COT # LangSmith 콜백 전달
+    )
+
+    # 의미 기반 예시 선택기
+    example_selector = SemanticSimilarityExampleSelector.from_examples(
+        examples, # 선택 가능한 예시 목록
+        OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY), # 임베딩 클래스 (의미적 유사성 측정)
+        FAISS, # 벡터저장소 클래스 (유사성 검색)
+        k=1 # 생성할 예시의 수
+    )
+
     # Few-shot PromptTemplate 구성
     prompt = FewShotPromptTemplate(
         prefix=prefix,
@@ -306,9 +319,17 @@ Fusarium spp. → 시들음병, Rhizoctonia solani → 검은무늬썩음병, Er
     # 체인 반환
     return prompt | llm
 
-def stream_final_answer_only(chain, question):
-    answer = chain.stream({"question": question})
-
-    for chunk in answer:
-        yield chunk.content if hasattr(chunk, "content") else str(chunk)
-
+# 체인 실행 결과를 스트리밍하고, content만 추출하여 반환
+def stream_final_answer_only(chain, question: str):
+    try:
+        for chunk in chain.stream({"question": question}):
+            content_to_yield = ""
+            if hasattr(chunk, "content"): # AIMessageChunk 등
+                content_to_yield = chunk.content
+            elif isinstance(chunk, str): # StrOutputParser 사용 시
+                content_to_yield = chunk
+            else: # 기타 경우 문자열로 변환
+                content_to_yield = str(chunk)
+            yield content_to_yield
+    except Exception as e:
+        yield f"\n\n[스트리밍 중 오류 발생: {e}]"
