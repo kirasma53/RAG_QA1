@@ -6,8 +6,8 @@ RAG_QA/
 ├── baseline/  
 │   ├── main.app.py  
 │   ├── etc...  
-│   ├── faiss_db/
-│   └── features/ 
+│   ├── faiss_db/  
+│   └── features/  
 │       └── etc...  
 └── .env <---Put here!!!!   
 
