@@ -602,7 +602,7 @@ if vectorstore:
                                 
                                 used_docs_detail = detail_item.get('used_docs', [])
                                 if used_docs_detail:
-                                    with st.expander(f"참고 문서 보기 ({len(used_docs_detail)}개)", use_container_width=True):
+                                    with st.popover(f"참고 문서 보기 ({len(used_docs_detail)}개)", use_container_width=True):
                                         for doc_j, doc_obj_detail in enumerate(used_docs_detail):
                                             st.markdown(f"**문서 {doc_j+1}**: *출처: {doc_obj_detail.metadata.get('file_name', 'N/A')} (인덱스: {doc_obj_detail.metadata.get('index', 'N/A')})*")
                                             st.text_area(

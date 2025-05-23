@@ -13,7 +13,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY")
 
 # --- LangSmith Tracing ---
-LANGSMITH_TRACING_ENABLED = True  # True로 설정 시 LangSmith 추적 활성화
+LANGSMITH_TRACING_ENABLED = False  # True로 설정 시 LangSmith 추적 활성화
 LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY")
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "RAG-System-Final")
 

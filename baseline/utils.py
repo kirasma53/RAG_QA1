@@ -15,6 +15,6 @@ def sentence_split(text: str) -> List[str]:
     if not isinstance(text, str):
         return []
     # 문장 부호 뒤에 공백이 여러 개 있거나 없는 경우도 고려
-    split_sentence = re.split(r'(?<=(다|죠|[.!?]))\s+', text.strip())
+    split_sentence = re.split(r'(?<=([.!?]))\s+', text.strip())
     # 빈 문자열 제거 및 앞뒤 공백 제거
     return [s.strip() for s in split_sentence if s and s.strip()]

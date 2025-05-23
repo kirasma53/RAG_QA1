@@ -1,11 +1,15 @@
 # RAG_QA
-How to run :
+Use python 3.12.*  
+  
+How to run :  
 RAG_QA/  
 ├── baseline/  
-│   ├── rag_combine.py  
-│   └── faiss_db/  
+│   ├── main.app.py  
+│   ├── etc...  
+│   ├── faiss_db/
+│   └── features/ 
+│       └── etc...  
 └── .env <---Put here!!!!   
 
-Enter 'streamlit run rag_combine.py'  
-
-
+Move to 'RAG_QA/baseline'  
+Enter 'streamlit run rag_combine.py' in baseline  
