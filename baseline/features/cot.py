@@ -7,6 +7,8 @@ from langchain_community.vectorstores import FAISS # Use for example_selector
 
 from config import OPENAI_API_KEY, LANGSMITH_TRACING_ENABLED, LANGCHAIN_PROJECT
 
+import re
+
 # LangSmith 설정 (build_user_query_prompt_chain에서 LLM 생성 시 콜백 전달)
 CALLBACKS_COT = []
 if LANGSMITH_TRACING_ENABLED:
@@ -62,7 +64,7 @@ examples = [
 
     ### 3단계: 논리적 정리 및 응답 생성
     🙏 안내드립니다:  
-    본 시스템에서는 [상추], [배추], [깻잎], [시금치], [감자], [고구마], [마늘], [양파], [토마토], [고추]에 대한 정보만 제공하고 있습니다.  
+    본 시스템에서는 [상추], [배추], [들깨], [시금치], [감자], [고구마], [마늘], [양파], [토마토], [고추]에 대한 정보만 제공하고 있습니다.  
     **당근**에 대한 정보는 제공되지 않으니, 관련 전문 기관이나 다른 자료를 참고해 주세요.
     """
         },
@@ -150,7 +152,7 @@ prefix = """당신은 농업 전문가입니다.
                 → "어떤 작물의 잎에 반점이 생기고 있나요? 예를 들어, 감자, 고구마, 배추 중 어느 것인지 알려주시면 더 정확한 진단이 가능합니다."  
 
         - 만약 **시스템에서 제공하지 않는 작물일 경우**:  
-            - "저는 [상추], [배추], [깻잎], [시금치], [감자], [고구마], [마늘], [양파], [토마토], [고추]에 대한 정보만 제공하고 있습니다.  
+            - "저는 [상추], [배추], [들깨], [시금치], [감자], [고구마], [마늘], [양파], [토마토], [고추]에 대한 정보만 제공하고 있습니다.  
             - 궁금하신 내용은 관련 전문 기관이나 다른 자료를 참고해 주세요."  
             - 이 경우, 질문의 유형은 **시스템이 제공하는 주제와 무관한 질문**입니다.
 
@@ -177,7 +179,6 @@ prefix = """당신은 농업 전문가입니다.
 
 ※ 모든 단계는 문서 기반이어야 하며, 추측은 지양해야 합니다.
 ※ 자연스럽고 논리적으로 서술하세요.
-※ 최종 출력은 3단계만 응답으로 나옵니다.
 """
 
 # CoT(Chain-of-Thought) 기반 프롬프트 체인을 구성. llm_model_name: 사용할 LLM 모델 이름
@@ -214,18 +215,3 @@ def build_user_query_prompt_chain(llm_model_name: str = "gpt-4-turbo"):
 
     # 체인 반환
     return prompt | llm
-
-# 체인 실행 결과를 스트리밍하고, content만 추출하여 반환
-def stream_final_answer_only(chain, question: str):
-    try:
-        for chunk in chain.stream({"question": question}):
-            content_to_yield = ""
-            if hasattr(chunk, "content"): # AIMessageChunk 등
-                content_to_yield = chunk.content
-            elif isinstance(chunk, str): # StrOutputParser 사용 시
-                content_to_yield = chunk
-            else: # 기타 경우 문자열로 변환
-                content_to_yield = str(chunk)
-            yield content_to_yield
-    except Exception as e:
-        yield f"\n\n[스트리밍 중 오류 발생: {e}]"

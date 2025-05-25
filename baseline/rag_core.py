@@ -1,4 +1,5 @@
 # RAG/baseline/rag_core.py
+import re
 import streamlit as st
 from typing import List, Tuple, Optional, Dict, Any
 import json
@@ -78,6 +79,15 @@ def load_vector_store(faiss_alias: str) -> Optional[FAISS]:
     except Exception as e:
         st.error(f"FAISS 벡터 DB 로드 중 오류 발생 ({faiss_alias}): {e}")
         return None
+
+def extract_step3_only(full_response: str) -> str:
+    """
+    LLM이 출력한 전체 CoT 응답에서 '### 3단계:' 이후의 본문 내용만 추출.
+    """
+    match = re.search(r"###\s*3\s*단계[:：][^\n\r]*[\n\r]+(.*)", full_response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return full_response
 
 def run_rag_pipeline(
     question: str,
@@ -169,7 +179,9 @@ def run_rag_pipeline(
                 content = str(result)
             
             st.write(f"{log_prefix}   CoT 답변 생성 완료.")
-            return content, final_docs_for_llm
+            content_step3 = extract_step3_only(content)
+            return content_step3, final_docs_for_llm
+
         else:
             st.write(f"{log_prefix}   기본 RAG 프롬프트 사용...")
             llm = ChatOpenAI(
