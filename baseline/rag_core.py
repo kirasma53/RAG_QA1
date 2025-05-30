@@ -28,12 +28,19 @@ if LANGSMITH_TRACING_ENABLED:
     TRACER_RAG_CORE = LangChainTracer(project_name=f"{LANGCHAIN_PROJECT}-RAGCore")
     CALLBACKS_RAG_CORE = [TRACER_RAG_CORE]
 
-@st.cache_resource(show_spinner="벡터 DB 로딩 중...")
+from typing import Literal
+from dotenv import load_dotenv
+from langchain_core.messages import SystemMessage, RemoveMessage, HumanMessage
+from langchain_openai import ChatOpenAI
+
+
+@st.cache_resource(show_spinner="벡터 DB 로딩 중...")  
+
 def load_vector_store(faiss_alias: str) -> Optional[FAISS]:
     """지정된 임베딩 모델에 대한 FAISS 벡터 저장소를 로드합니다."""
     if faiss_alias not in AVAILABLE_EMBEDDINGS:
         st.error(f"지원하지 않는 임베딩 모델 별칭입니다: {faiss_alias}")
-        return None
+        return None 
     
     model_name = AVAILABLE_EMBEDDINGS[faiss_alias]
     st.write(f"임베딩 모델 로딩 중: {faiss_alias} ({model_name})...")
@@ -80,6 +87,7 @@ def load_vector_store(faiss_alias: str) -> Optional[FAISS]:
         st.error(f"FAISS 벡터 DB 로드 중 오류 발생 ({faiss_alias}): {e}")
         return None
 
+
 def extract_step3_only(full_response: str) -> str:
     """
     LLM이 출력한 전체 CoT 응답에서 '### 3단계:' 이후의 본문 내용만 추출.
@@ -88,6 +96,7 @@ def extract_step3_only(full_response: str) -> str:
     if match:
         return match.group(1).strip()
     return full_response
+
 
 def run_rag_pipeline(
     question: str,
@@ -99,7 +108,7 @@ def run_rag_pipeline(
     summarize_before_rerank: bool,
     llm_model_name: str,
     use_cot: bool, # CoT 사용 여부 플래그
-    run_id: str = "" # 로깅/추적용 ID
+    run_id: str = "" # 로깅/추적용 ID,
 ) -> Tuple[str, List[Document]]:
     """RAG 파이프라인을 실행하여 답변과 사용된 문서를 반환합니다."""
     
@@ -204,9 +213,9 @@ def run_rag_pipeline(
     except Exception as e:
         st.error(f"{log_prefix}LLM 호출 중 오류 발생: {e}")
         return f"오류: 답변 생성 중 문제가 발생했습니다 ({e})", final_docs_for_llm
+    
 
-
-def load_evaluation_set(uploaded_file) -> Optional[List[Dict[str, Any]]]:
+def load_evaluation_set(uploaded_file, is_multiturn = False) -> Optional[List[Dict[str, Any]]]:
     """업로드된 JSON 평가셋 파일을 로드하고 유효성을 검사합니다."""
     if uploaded_file is None:
         st.error("평가셋 파일을 업로드해주세요.")
@@ -225,6 +234,7 @@ def load_evaluation_set(uploaded_file) -> Optional[List[Dict[str, Any]]]:
         # 평가셋 항목에 필수로 있어야 하는 키 정의 (예시)
         required_keys = {'question', 'answer'} # 'p', 'num', 'no', 'name' 등도 필요시 추가
 
+        #item의 idx와 item을 들고 온다.
         for item_idx, item in enumerate(eval_data):
             if not isinstance(item, dict):
                 st.warning(f"평가셋의 {item_idx+1}번째 항목이 딕셔너리 형식이 아닙니다. 건너뜁니다.")
@@ -234,11 +244,18 @@ def load_evaluation_set(uploaded_file) -> Optional[List[Dict[str, Any]]]:
                 st.warning(f"평가셋의 {item_idx+1}번째 항목에 필수 키 {required_keys}가 모두 포함되어 있지 않습니다. 건너뜁니다. (현재 키: {item.keys()})")
                 continue
 
-            # 'name' 또는 'num' 키가 없거나 비어있을 경우 'unrelate'로 설정 (기존 로직)
+            # 'name' 또는 'num' 또는 'M' 키가 없거나 비어있을 경우 'unrelate'로 설정 (기존 로직)
             is_name_empty = not item.get("name")
             is_num_empty = not item.get("num")
-            if is_name_empty or is_num_empty:
-                item["name"] = ["unrelate"] # 리스트 형태로 유지
+            is_M_empty = not item.get("M")
+            
+            #multiturn 평가셋일 때와 구분하며 기본적으로 is_multiturn은 false
+            if is_multiturn : 
+                if is_name_empty or is_num_empty or is_M_empty : 
+                    item["name"] = ["unrelate"]
+            else : 
+                if is_name_empty or is_num_empty:
+                    item["name"] = ["unrelate"] # 리스트 형태로 유지
 
             valid_data.append(item)
 

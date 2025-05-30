@@ -20,7 +20,6 @@ if LANGSMITH_TRACING_ENABLED:
 # Returns:
 # - str: 재작성된 질문 (또는 그대로 반환)
 def query_reformulation(query_db: list[str], current_question: str, turn_num: int) -> str:
-
     if not OPENAI_API_KEY:
         st.error("멀티턴 질문 재구성을 위해서는 OpenAI API 키가 필요합니다.")
         return current_question
@@ -89,3 +88,57 @@ def query_reformulation(query_db: list[str], current_question: str, turn_num: in
     except Exception as e:
         st.error(f"멀티턴 질문 재작성 중 오류 발생: {e}")
         return current_question # 오류 시 현재 질문 그대로 반환
+    
+
+###사람 질문과 AI 응답, 현재 history를 받아서 새로운 history를 생성하는 함수
+def summarize_conversation(current_history: str, current_question : str, crruent_AI_responese : str) -> str :
+    if not OPENAI_API_KEY:
+        st.error("멀티턴 질문 재구성을 위해서는 OpenAI API 키가 필요합니다.")
+        return current_history
+    
+    # 프롬프트 구성
+    prompt_text = f"""
+당신은 대화 요약 및 히스토리 관리 전문가입니다.
+다음 정보를 바탕으로, 불필요한 부분은 제거하고 핵심만 간결하게 정리하여 새로운 히스토리 문자열을 생성하세요.
+
+이전 히스토리:
+{current_history}
+
+사용자의 질문:
+{current_question}
+
+AI의 응답:
+{crruent_AI_responese}
+
+# 지침
+- 대화 흐름을 이어갈 수 있도록 중요한 키워드,의도,결과만 포함하세요.
+- 단계별 번호나 불릿이 아니라, 자연스러운 문장 형태의 흐름 요약을 출력합니다.
+- 길이는 원래 히스토리보다 짧게 유지하되, 문맥이 끊기지 않게 작성하세요.
+
+새로운 히스토리:
+"""
+
+    llm = ChatOpenAI(
+        model="gpt-3.5-turbo", # 비용...
+        temperature=0, # temperature 0 or 0.1?
+        openai_api_key=OPENAI_API_KEY,
+        max_tokens=256, # optional
+        callbacks=CALLBACKS_MULTITURN
+    )
+
+    try:
+        response = llm.invoke([HumanMessage(content=prompt_text)])
+        new_history = response.content.strip()
+        
+        if not new_history: # LLM이 빈 문자열을 반환한 경우
+            st.warning("History 요약 결과가 비어있습니다. 현재 History를 그대로 사용합니다.")
+            return current_history
+        else :
+            return new_history
+        
+    except Exception as e:
+        st.error(f"History 요약 중 오류 발생: {e}")
+        return current_history # 오류 시 현재 history 그대로 반환
+
+    
+    

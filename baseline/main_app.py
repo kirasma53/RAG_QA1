@@ -5,6 +5,8 @@ import itertools # 현재는 사용 X
 import json # 현재는 사용 X
 import numpy as np # 평균 점수 계산 시 사용
 import pandas as pd # 현재는 사용 X
+
+import os
 from pathlib import Path # config에서 사용
 
 # --- Import config, utils, rag_core ---
@@ -22,9 +24,10 @@ from rag_core import (
     load_evaluation_set, compute_evalset_f1
 )
 # --- Import feature module ---
-from features.multiturn import query_reformulation
+from features.multiturn import query_reformulation, summarize_conversation
 from features.fact_checking import fact_checker, rewrite_question_single
 from features.gpt_scoring import get_combined_score
+
 
 # --- Streamlit App UI ---
 st.set_page_config(page_title="RAG 시스템 (농산물 QA)", layout="wide")
@@ -48,7 +51,7 @@ selected_llm = st.sidebar.selectbox(
     help="답변 생성에 사용될 언어 모델입니다. API 비용 발생."
 )
 use_reranker_default = st.sidebar.checkbox(
-    "리랭커 사용", value=True,
+    "리랭커 사용", value = False,
     help="검색된 문서의 순위를 답변 생성 전에 재조정합니다."
 )
 selected_reranker_method_default = None
@@ -70,9 +73,13 @@ st.sidebar.markdown("---")
 
 # --- 부가 기능 On/Off ---
 st.sidebar.header("2. 부가 기능 On/Off")
-use_multiturn_toggle = st.sidebar.checkbox(
-    "멀티턴 대화 사용", value=True,
-    help="이전 대화의 맥락을 고려하여 현재 질문을 재구성합니다. (OpenAI API 비용 발생 가능)"
+use_query_multiturn_toggle = st.sidebar.checkbox(
+    "query 요약 멀티턴 사용", value= False,
+    help="이전 질문을 기반으로 현재 질문을 재구성합니다. (OpenAI API 비용 발생 가능)"
+)
+use_history_multiturn_toggle = st.sidebar.checkbox(
+    "history 요약 멀티턴 사용", value = False,
+    help = "이전 대화 내용의 요약을 기반으로 현재 질문을 재구성합니다. (OpenAI API 비용 발생가능)"
 )
 use_cot_toggle = st.sidebar.checkbox(
     "CoT 프롬프트 사용", value=True,
@@ -83,7 +90,7 @@ summarize_before_rerank_toggle = st.sidebar.checkbox(
     help="리랭커가 처리하기 전에 각 문서를 OpenAI를 이용해 요약합니다. (OpenAI API 비용 발생)"
 )
 use_fact_checker_toggle = st.sidebar.checkbox(
-    "Fact Checker 사용 (Upstage API)", value=True,
+    "Fact Checker 사용 (Upstage API)", value = False,
     help="답변 생성 후 Upstage Groundedness Check를 수행합니다. 점수가 낮으면 질문 재작성을 시도할 수 있습니다. (Upstage API 비용 발생)"
 )
 use_gpt_scoring_toggle = st.sidebar.checkbox(
@@ -99,7 +106,7 @@ col_sum1, col_sum2 = st.columns(2)
 with col_sum1:
     st.caption(f"**현재 설정:** Embedding: `{selected_embedding_alias}` | LLM: `{selected_llm}` | Reranker: `{selected_reranker_method_default if use_reranker_default and selected_reranker_method_default else '사용 안 함'}`")
 with col_sum2:
-    st.caption(f"**부가 기능:** 멀티턴: `{'ON' if use_multiturn_toggle else 'OFF'}` | CoT: `{'ON' if use_cot_toggle else 'OFF'}` | 요약: `{'ON' if summarize_before_rerank_toggle else 'OFF'}` | FactCheck: `{'ON' if use_fact_checker_toggle else 'OFF'}` | GPT평가: `{'ON' if use_gpt_scoring_toggle else 'OFF'}`")
+    st.caption(f"**부가 기능:** 멀티턴: `{'ON' if use_query_multiturn_toggle else 'OFF'}` | CoT: `{'ON' if use_cot_toggle else 'OFF'}` | 요약: `{'ON' if summarize_before_rerank_toggle else 'OFF'}` | FactCheck: `{'ON' if use_fact_checker_toggle else 'OFF'}` | GPT평가: `{'ON' if use_gpt_scoring_toggle else 'OFF'}`")
 
 
 # Load vector DB
@@ -111,10 +118,15 @@ except Exception as e:
 
 
 # 세션 상태 초기화
+#query_db : query를 저장하는 DB
+#turn_num : turn 횟수 저장
+#history : 이전 대화 한줄 요약
 if "query_db" not in st.session_state: st.session_state.query_db = []
 if "turn_num" not in st.session_state: st.session_state.turn_num = 0
 if 'evaluation_details' not in st.session_state: st.session_state.evaluation_details = {}
 if 'aggregated_scores' not in st.session_state: st.session_state.aggregated_scores = {}
+if "history" not in st.session_state: st.session_state.history = ""
+
 
 
 if vectorstore:
@@ -131,22 +143,27 @@ if vectorstore:
         run_button_clicked = st.button("질문하기", key="single_run_button", use_container_width=True, type="primary")
     with button_cols[1]:
         if st.button("새 대화 시작", key="reset_multiturn_button", help="멀티턴 대화 기록을 초기화합니다.", use_container_width=True):
+            #query_multiturn varaible initialize
             st.session_state.query_db = []
             st.session_state.turn_num = 0
+            #history initialize
+            st.session_state.history = ""
             st.success("새 대화가 시작되었습니다. 이전 대화 기록이 초기화되었습니다.")
+    
+
 
     if run_button_clicked and question_input:
         st.markdown("---")
         st.header("단일 실행 결과")
         
         current_question_for_pipeline = question_input
-
-        if use_multiturn_toggle:
+        
+        if use_query_multiturn_toggle:
             st.session_state.query_db.append(question_input)
             st.session_state.turn_num += 1
             if st.session_state.turn_num > 1:
                 st.write("멀티턴 질문 재구성 중...")
-                with st.spinner("이전 대화 내용을 바탕으로 질문을 재구성하고 있습니다..."):
+                with st.spinner("이전 질문을 바탕으로 질문을 재구성하고 있습니다..."):
                     try:
                         current_question_for_pipeline = query_reformulation(
                             st.session_state.query_db,
@@ -168,19 +185,29 @@ if vectorstore:
             st.session_state.turn_num = 1
             current_question_for_pipeline = question_input
 
+        #use_history_multirun_toggle일 경우  history + query로 재생성
+        if use_history_multiturn_toggle : 
+            if st.session_state.history is not "" :
+                current_question_for_pipeline = f'이전 대화는 "{st.session_state.history}"이고, 현재 내 질문은 "{question_input}"이다'
+            else :
+                current_question_for_pipeline = question_input
+
         cost_flags = []
         if selected_embedding_alias == 'openai': cost_flags.append("OpenAI Embedding")
-        if summarize_before_rerank_toggle and use_reranker_default : cost_flags.append("OpenAI Summarization")
+        if summarize_before_rerank_toggle and use_reranker_default : cost_flags.append("OpenAI Summarization")  
         if selected_llm.startswith('gpt'): cost_flags.append(f"OpenAI LLM ({selected_llm})")
         if use_fact_checker_toggle: cost_flags.append("Upstage FactCheck")
         if use_gpt_scoring_toggle: cost_flags.append(f"OpenAI Scoring ({DEFAULT_GPT_SCORING_MODEL})")
-        if use_multiturn_toggle and st.session_state.turn_num > 1 and current_question_for_pipeline != question_input:
-            cost_flags.append("OpenAI Multiturn Rewrite")
+        if use_query_multiturn_toggle and st.session_state.turn_num > 1 and current_question_for_pipeline != question_input:
+            cost_flags.append("OpenAI query Multiturn Rewrite")
+        if use_history_multiturn_toggle : cost_flags.append("OpenAI history Multiturn Rewrite")
         if cost_flags:
             st.info(f"API 비용 발생 가능 항목: {', '.join(cost_flags)}")
 
         final_response_text = "오류: 처리 중 문제 발생"
         final_docs_used_for_response = []
+
+
 
         try:
             with st.spinner("RAG 파이프라인 실행 중... 잠시만 기다려주세요."):
@@ -264,6 +291,12 @@ if vectorstore:
                         )
                 else:
                     st.write("최종 답변 생성에 사용된 문서가 없습니다.")
+
+            #use_history_multiturn이 체크 되어 있을 경우 가장 마지막 단계에 history 생성 후 저장
+            if use_history_multiturn_toggle and final_response_text and "오류:" not in final_response_text:
+                st.write(f" history 생성 중... ")
+                st.session_state.history = summarize_conversation(st.session_state.history, current_question_for_pipeline, final_response_text)
+
 
         except Exception as e_single_run:
             st.error(f"단일 실행 처리 중 심각한 오류 발생: {e_single_run}")
@@ -406,7 +439,7 @@ if vectorstore:
         default=[DEFAULT_EMBEDDING_ALIAS], key="set_eval_embeddings"
     )
     eval_use_reranker_for_set = st.sidebar.checkbox(
-        "평가셋 평가 시 리랭커 사용", value=True, key="set_eval_use_reranker"
+        "평가셋 평가 시 리랭커 사용", value=False, key="set_eval_use_reranker"
     )
     eval_rerankers_for_set = []
     if eval_use_reranker_for_set:
@@ -420,8 +453,14 @@ if vectorstore:
         st.markdown("---")
         st.header("모델 조합 평가 결과 (평가셋)")
 
-        evaluation_set_data = load_evaluation_set(uploaded_eval_file)
+        
+        #uploaded_eval_file의 json 파일을 파싱하여 저장. multiturn인 경우와 아닌 경우 구분하여 파싱
+        if use_query_multiturn_toggle or use_history_multiturn_toggle :
+            evaluation_set_data = load_evaluation_set(uploaded_eval_file, True)
+        else : 
+            evaluation_set_data = load_evaluation_set(uploaded_eval_file)
 
+        #evaluation_set_data가 존재할 경우
         if evaluation_set_data:
             st.session_state.evaluation_details = {}
             st.session_state.aggregated_scores = {}
@@ -441,6 +480,7 @@ if vectorstore:
                 runs_completed_count = 0
                 total_runs_for_set = total_combinations * total_questions_in_set
 
+                #선택한 임베딩 모델 종류에 대해
                 for emb_alias_set in eval_embeddings_for_set:
                     st.write(f"평가셋용 임베딩 모델 '{emb_alias_set}' 로딩 중...")
                     current_vectorstore_set = load_vector_store(emb_alias_set)
@@ -453,76 +493,168 @@ if vectorstore:
                     for reranker_method_set in reranker_list_to_iterate_set:
                         reranker_display_name_set = '사용 안 함' if not eval_use_reranker_for_set or reranker_method_set is None else reranker_method_set
                         combination_key_set = (emb_alias_set, reranker_display_name_set)
-
+                        
+                        # session state initialize
                         st.session_state.aggregated_scores[combination_key_set] = {'fact_check_scores': [], 'gpt_scores_list': [], 'f1_scores': []}
                         st.session_state.evaluation_details[combination_key_set] = []
                         
+                        #query initialize
+                        st.session_state.query_db = []
+                        st.session_state.turn_num = 0
+                       
+                        #history initialize
+                        st.session_state.history = ""
+
+
+
                         st.subheader(f"조합 평가 중: Embedding: {emb_alias_set}, Reranker: {reranker_display_name_set}")
                         
+                        #model set에 대한 quetion 반복
+                        #여기에 M item이 존재할 경우, 숫자가 바뀌기 전까지 계속해서 multiturn으로 진행하고 바뀌면 multiturn 끝내도록 변경.
+                        prev_M_index = None
                         for q_idx, eval_item in enumerate(evaluation_set_data):
+                            #현재 평가셋의 속성을 들고 온다
                             eval_question_text = eval_item['question']
                             eval_ground_truth_text = eval_item['answer']
+                            eval_multiturn_index = eval_item['M']
+
                             run_id_set_item = f"Set_Emb:{emb_alias_set}_Rerank:{reranker_display_name_set}_Q:{q_idx+1}"
                             
                             progress_text.text(f"진행률: {runs_completed_count+1}/{total_runs_for_set} - {run_id_set_item}")
-
+                            
+                            #eval_response_item 등의 로컬 변수 초기화
+                            current_question_for_pipeline = eval_question_text
                             eval_response_item = "오류"
                             eval_docs_used_item = []
                             avg_fc_score_item = None
                             f1_score_item = None
                             gpt_scores_item = None
 
-                            try:
-                                # run_rag_pipeline 호출 시 멀티턴은 적용하지 않음 (평가셋 질문은 독립적)
-                                # CoT는 사이드바 설정 따름
-                                eval_response_item, eval_docs_used_item = run_rag_pipeline(
-                                    question=eval_question_text, vectorstore=current_vectorstore_set,
-                                    retriever_k=retriever_k_value, use_reranker=eval_use_reranker_for_set,
-                                    reranker_method=reranker_method_set, reranker_top_k=reranker_top_k_value,
-                                    summarize_before_rerank=summarize_before_rerank_toggle,
-                                    llm_model_name=selected_llm, use_cot=use_cot_toggle,
-                                    run_id=run_id_set_item
-                                )
+
+                            ######### index M의 내용이 바뀌었을 경우 다시 바꾸도록 하는 코드 ###########
+                            ### M 이전게 다른거거나 q_idx가 0이면 리셋하도록 ###
+                            if q_idx == 0 or eval_multiturn_index != prev_M_index:
+                                #query_multiturn varaible initialize
+                                st.session_state.query_db = []
+                                st.session_state.turn_num = 0
+                                #history initialize
+                                st.session_state.history = ""
                                 
-                                if use_fact_checker_toggle and eval_docs_used_item and eval_response_item and "오류:" not in eval_response_item:
-                                    sentences_fc_set = sentence_split(eval_response_item)
-                                    if sentences_fc_set:
-                                        avg_fc_score_item, _ = fact_checker(sentences_fc_set, eval_docs_used_item)
-                                if avg_fc_score_item is not None:
-                                    st.session_state.aggregated_scores[combination_key_set]['fact_check_scores'].append(avg_fc_score_item)
-                                
-                                if eval_docs_used_item:
-                                     f1_score_item = compute_evalset_f1(eval_item, eval_docs_used_item)
-                                     if f1_score_item is not None:
-                                         st.session_state.aggregated_scores[combination_key_set]['f1_scores'].append(f1_score_item)
+                            prev_M_index = eval_multiturn_index
+                            ########## multiturn query 수정 파트########
 
-                                if use_gpt_scoring_toggle and eval_docs_used_item and eval_response_item and "오류:" not in eval_response_item:
-                                    context_str_set = format_docs(eval_docs_used_item)
-                                    gpt_scores_item = get_combined_score(eval_question_text, eval_response_item, context_str_set, eval_ground_truth_text)
-                                if gpt_scores_item and "Error" not in gpt_scores_item: # 오류가 없는 경우에만 추가
-                                    st.session_state.aggregated_scores[combination_key_set]['gpt_scores_list'].append(gpt_scores_item)
-                                elif gpt_scores_item and "Error" in gpt_scores_item:
-                                    st.warning(f"GPT Scoring Error for {run_id_set_item}: {gpt_scores_item['Error']}")
+                            if use_query_multiturn_toggle:
+                                st.session_state.query_db.append(eval_question_text)
+                                st.session_state.turn_num += 1
+                                if st.session_state.turn_num > 1:
+                                    st.write("멀티턴 질문 재구성 중...")
+                                    with st.spinner("이전 질문을 바탕으로 질문을 재구성하고 있습니다..."):
+                                        try:
+                                            current_question_for_pipeline = query_reformulation(
+                                                st.session_state.query_db,
+                                                eval_question_text,
+                                                st.session_state.turn_num
+                                            )
+                                            if current_question_for_pipeline != eval_question_text:
+                                                st.info(f"재구성된 질문 (멀티턴): {current_question_for_pipeline}")
+                                            else:
+                                                st.info("멀티턴: 현재 질문을 그대로 사용합니다.")
+                                        except Exception as e:
+                                            st.error(f"멀티턴 질문 재구성 실패: {e}")
+                                            current_question_for_pipeline = eval_question_text
+                                else:
+                                    st.write("첫 번째 질문입니다. 멀티턴 재구성을 건너뜁니다.")
+                                    current_question_for_pipeline = eval_question_text
+                            else:
+                                st.session_state.query_db = [eval_question_text]
+                                st.session_state.turn_num = 1
+                                current_question_for_pipeline = eval_question_text
+
+                            #use_history_multirun_toggle일 경우  history + query로 재생성
+                            if use_history_multiturn_toggle : 
+                                #history가 안비어있다면
+                                if st.session_state.history != "" :
+                                    current_question_for_pipeline = f'이전 대화는 "{st.session_state.history}"이고, 현재 내 질문은 "{eval_question_text}"이다'
+                                else :
+                                    current_question_for_pipeline = eval_question_text
 
 
-                                st.session_state.evaluation_details[combination_key_set].append({
-                                    "question": eval_question_text, "ground_truth": eval_ground_truth_text,
-                                    "response": eval_response_item, "fact_check_score": avg_fc_score_item,
-                                    "f1_score": f1_score_item, "gpt_scores": gpt_scores_item,
-                                    "used_docs": eval_docs_used_item
-                                })
 
-                            except Exception as e_set_item:
-                                st.error(f"[{run_id_set_item}] 평가 실행 중 오류: {e_set_item}")
-                                st.session_state.evaluation_details[combination_key_set].append({
-                                    "question": eval_question_text, "ground_truth": eval_ground_truth_text,
-                                    "response": f"오류 발생: {e_set_item}", "fact_check_score": None,
-                                    "f1_score": None, "gpt_scores": {"Error": str(e_set_item)},
-                                    "used_docs": []
-                                })
-                            finally:
-                                runs_completed_count += 1
-                                progress_bar.progress(min(1.0, runs_completed_count / total_runs_for_set) if total_runs_for_set > 0 else 0.0)
+                            # multiturn이 아닐 때 또는 멀티턴 history가 있을 때 평가
+                            if (use_history_multiturn_toggle is False and use_query_multiturn_toggle is False) or st.session_state.history != "" :
+
+                                try:
+                                    # run_rag_pipeline 호출 시 멀티턴은 적용하지 않음 (평가셋 질문은 독립적)
+                                    # CoT는 사이드바 설정 따름
+                                    #eval_response_item이 AI 응답
+                                    #current_question_for_pipeline이 바꾼 query
+                                    
+                                    
+
+                                    eval_response_item, eval_docs_used_item = run_rag_pipeline(
+                                        question=current_question_for_pipeline, vectorstore=current_vectorstore_set,
+                                        retriever_k=retriever_k_value, use_reranker=eval_use_reranker_for_set,
+                                        reranker_method=reranker_method_set, reranker_top_k=reranker_top_k_value,
+                                        summarize_before_rerank=summarize_before_rerank_toggle,
+                                        llm_model_name=selected_llm, use_cot=use_cot_toggle,
+                                        run_id=run_id_set_item
+                                    )
+                                    
+                                    if use_fact_checker_toggle and eval_docs_used_item and eval_response_item and "오류:" not in eval_response_item:
+                                        sentences_fc_set = sentence_split(eval_response_item)
+                                        if sentences_fc_set:
+                                            avg_fc_score_item, _ = fact_checker(sentences_fc_set, eval_docs_used_item)
+                                    if avg_fc_score_item is not None:
+                                        st.session_state.aggregated_scores[combination_key_set]['fact_check_scores'].append(avg_fc_score_item)
+                                    
+                                    if eval_docs_used_item:
+                                        f1_score_item = compute_evalset_f1(eval_item, eval_docs_used_item)
+                                        if f1_score_item is not None:
+                                            st.session_state.aggregated_scores[combination_key_set]['f1_scores'].append(f1_score_item)
+
+
+                                    # 평가셋 이용시 무조건 평가하도록 수정
+                                    if eval_docs_used_item and eval_response_item and "오류:" not in eval_response_item:
+                                        context_str_set = format_docs(eval_docs_used_item)
+                                        gpt_scores_item = get_combined_score(eval_question_text, eval_response_item, context_str_set, eval_ground_truth_text)
+                                    
+                                    if gpt_scores_item and "Error" not in gpt_scores_item: # 오류가 없는 경우에만 추가
+                                        st.session_state.aggregated_scores[combination_key_set]['gpt_scores_list'].append(gpt_scores_item)
+                                    
+                                    elif gpt_scores_item and "Error" in gpt_scores_item:
+                                        st.warning(f"GPT Scoring Error for {run_id_set_item}: {gpt_scores_item['Error']}")
+
+
+                                    st.session_state.evaluation_details[combination_key_set].append({
+                                        "question": eval_question_text, "ground_truth": eval_ground_truth_text,
+                                        "response": eval_response_item, "fact_check_score": avg_fc_score_item,
+                                        "f1_score": f1_score_item, "gpt_scores": gpt_scores_item,
+                                        "used_docs": eval_docs_used_item
+                                    })
+
+                                    
+                                except Exception as e_set_item:
+                                    st.error(f"[{run_id_set_item}] 평가 실행 중 오류: {e_set_item}")
+                                    st.session_state.evaluation_details[combination_key_set].append({
+                                        "question": eval_question_text, "ground_truth": eval_ground_truth_text,
+                                        "response": f"오류 발생: {e_set_item}", "fact_check_score": None,
+                                        "f1_score": None, "gpt_scores": {"Error": str(e_set_item)},
+                                        "used_docs": []
+                                    })
+                                finally:
+                                    if use_history_multiturn_toggle and use_query_multiturn_toggle : 
+                                        runs_completed_count += 2
+                                    else : 
+                                        runs_completed_count += 1
+                                    progress_bar.progress(min(1.0, runs_completed_count / total_runs_for_set) if total_runs_for_set > 0 else 0.0)
+
+
+                            #use_history_multiturn이 체크 되어 있을 경우 가장 마지막 단계에 history 생성 후 저장
+                            #item[name]이 unrelate이면 single turn을 의미하므로 아닌 경우만 history 생성
+                            if use_history_multiturn_toggle and eval_response_item and "오류:" not in eval_response_item and eval_item["name"] != ["unrelate"]:
+                                st.write(f" history 생성 중... ")
+                                #평가셋의 ground truth로 생성.
+                                st.session_state.history = summarize_conversation(st.session_state.history, eval_question_text, eval_ground_truth_text)
                         
                         progress_text.text(f"진행률: {runs_completed_count}/{total_runs_for_set} - 조합 완료: Emb: {emb_alias_set}, Rerank: {reranker_display_name_set}")
 

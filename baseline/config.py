@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 # RAG/baseline/
 BASE_DIR = Path(__file__).resolve().parent
-# RAG/
+# RAG폴더에 env파일 있을 경우
 load_dotenv(BASE_DIR.parent / ".env")
 
 # --- API Keys ---
