@@ -215,7 +215,7 @@ def run_rag_pipeline(
         return f"오류: 답변 생성 중 문제가 발생했습니다 ({e})", final_docs_for_llm
     
 
-def load_evaluation_set(uploaded_file, is_multiturn = False) -> Optional[List[Dict[str, Any]]]:
+def load_evaluation_set(uploaded_file, is_multiturn) -> Optional[List[Dict[str, Any]]]:
     """업로드된 JSON 평가셋 파일을 로드하고 유효성을 검사합니다."""
     if uploaded_file is None:
         st.error("평가셋 파일을 업로드해주세요.")

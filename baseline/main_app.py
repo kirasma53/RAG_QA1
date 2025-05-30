@@ -458,7 +458,7 @@ if vectorstore:
         if use_query_multiturn_toggle or use_history_multiturn_toggle :
             evaluation_set_data = load_evaluation_set(uploaded_eval_file, True)
         else : 
-            evaluation_set_data = load_evaluation_set(uploaded_eval_file)
+            evaluation_set_data = load_evaluation_set(uploaded_eval_file, False)
 
         #evaluation_set_data가 존재할 경우
         if evaluation_set_data:
@@ -516,7 +516,20 @@ if vectorstore:
                             #현재 평가셋의 속성을 들고 온다
                             eval_question_text = eval_item['question']
                             eval_ground_truth_text = eval_item['answer']
-                            eval_multiturn_index = eval_item['M']
+
+                            if use_query_multiturn_toggle or use_history_multiturn_toggle : 
+                                eval_multiturn_index = eval_item['M']
+
+                                ######### index M의 내용이 바뀌었을 경우 다시 바꾸도록 하는 코드 ###########
+                                ### M 이전게 다른거거나 q_idx가 0이면 리셋하도록 ###
+                                if q_idx == 0 or eval_multiturn_index != prev_M_index:
+                                    #query_multiturn varaible initialize
+                                    st.session_state.query_db = []
+                                    st.session_state.turn_num = 0
+                                    #history initialize
+                                    st.session_state.history = ""
+
+                                prev_M_index = eval_multiturn_index
 
                             run_id_set_item = f"Set_Emb:{emb_alias_set}_Rerank:{reranker_display_name_set}_Q:{q_idx+1}"
                             
@@ -528,19 +541,9 @@ if vectorstore:
                             eval_docs_used_item = []
                             avg_fc_score_item = None
                             f1_score_item = None
-                            gpt_scores_item = None
-
-
-                            ######### index M의 내용이 바뀌었을 경우 다시 바꾸도록 하는 코드 ###########
-                            ### M 이전게 다른거거나 q_idx가 0이면 리셋하도록 ###
-                            if q_idx == 0 or eval_multiturn_index != prev_M_index:
-                                #query_multiturn varaible initialize
-                                st.session_state.query_db = []
-                                st.session_state.turn_num = 0
-                                #history initialize
-                                st.session_state.history = ""
+                            gpt_scores_item = None     
                                 
-                            prev_M_index = eval_multiturn_index
+                            
                             ########## multiturn query 수정 파트########
 
                             if use_query_multiturn_toggle:
