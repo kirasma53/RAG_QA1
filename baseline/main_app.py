@@ -85,7 +85,7 @@ use_history_multiturn_toggle = st.sidebar.checkbox(
     help = "이전 대화 내용의 요약을 기반으로 현재 질문을 재구성합니다. (OpenAI API 비용 발생가능)"
 )
 use_cot_toggle = st.sidebar.checkbox(
-    "CoT 프롬프트 사용", value=True,
+    "CoT 프롬프트 사용", value=False,
     help="LLM이 단계적으로 생각하여 답변을 생성하도록 유도하는 프롬프트를 사용합니다."
 )
 summarize_before_rerank_toggle = st.sidebar.checkbox(
