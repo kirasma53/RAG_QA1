@@ -29,6 +29,7 @@ from features.fact_checking import fact_checker, rewrite_question_single
 from features.gpt_scoring import get_combined_score
 
 
+
 # --- Streamlit App UI ---
 st.set_page_config(page_title="RAG 시스템 (농산물 QA)", layout="wide")
 st.title("RAG 기반 농산물 질의응답 시스템")
@@ -116,6 +117,8 @@ except Exception as e:
     st.error(f"메인 앱: 벡터 DB 로드 중 심각한 오류 발생 - {e}")
     vectorstore = None
 
+# Load document
+
 
 # 세션 상태 초기화
 #query_db : query를 저장하는 DB
@@ -126,7 +129,7 @@ if "turn_num" not in st.session_state: st.session_state.turn_num = 0
 if 'evaluation_details' not in st.session_state: st.session_state.evaluation_details = {}
 if 'aggregated_scores' not in st.session_state: st.session_state.aggregated_scores = {}
 if "history" not in st.session_state: st.session_state.history = ""
-
+if "history_word" not in st.session_state: st.session_state.history_word = []
 
 
 if vectorstore:
@@ -148,6 +151,7 @@ if vectorstore:
             st.session_state.turn_num = 0
             #history initialize
             st.session_state.history = ""
+            st.session_state.history_word = []
             st.success("새 대화가 시작되었습니다. 이전 대화 기록이 초기화되었습니다.")
     
 
@@ -185,12 +189,17 @@ if vectorstore:
             st.session_state.turn_num = 1
             current_question_for_pipeline = question_input
 
-        #use_history_multirun_toggle일 경우  history + query로 재생성
-        if use_history_multiturn_toggle : 
-            if st.session_state.history is not "" :
-                current_question_for_pipeline = f'이전 대화는 "{st.session_state.history}"이고, 현재 내 질문은 "{question_input}"이다'
-            else :
+
+        # use_history_multiturn_toggle일 경우 history 키워드 + query로 재생성
+        if use_history_multiturn_toggle:
+            if st.session_state.history_word is not []:
+                # history_word가 리스트라면, 문자열로 합치기
+                keywords_str = ", ".join(st.session_state.history_word)
+                # 키워드들을 쿼리에 추가
+                current_question_for_pipeline = f"{question_input} (관련 키워드: {keywords_str})"
+            else:
                 current_question_for_pipeline = question_input
+
 
         cost_flags = []
         if selected_embedding_alias == 'openai': cost_flags.append("OpenAI Embedding")
@@ -295,7 +304,7 @@ if vectorstore:
             #use_history_multiturn이 체크 되어 있을 경우 가장 마지막 단계에 history 생성 후 저장
             if use_history_multiturn_toggle and final_response_text and "오류:" not in final_response_text:
                 st.write(f" history 생성 중... ")
-                st.session_state.history = summarize_conversation(st.session_state.history, current_question_for_pipeline, final_response_text)
+                st.session_state.history, st.session_state.history_word = summarize_conversation(st.session_state.history, current_question_for_pipeline, final_response_text)
 
 
         except Exception as e_single_run:
@@ -504,6 +513,7 @@ if vectorstore:
                        
                         #history initialize
                         st.session_state.history = ""
+                        st.session_state.history_word = []
 
 
 
@@ -528,6 +538,7 @@ if vectorstore:
                                     st.session_state.turn_num = 0
                                     #history initialize
                                     st.session_state.history = ""
+                                    st.session_state.history_word = []
 
                                 prev_M_index = eval_multiturn_index
 
@@ -573,13 +584,15 @@ if vectorstore:
                                 st.session_state.turn_num = 1
                                 current_question_for_pipeline = eval_question_text
 
-                            #use_history_multirun_toggle일 경우  history + query로 재생성
-                            if use_history_multiturn_toggle : 
-                                #history가 안비어있다면
-                                if st.session_state.history != "" :
-                                    current_question_for_pipeline = f'이전 대화는 "{st.session_state.history}"이고, 현재 내 질문은 "{eval_question_text}"이다'
-                                else :
-                                    current_question_for_pipeline = eval_question_text
+                            # use_history_multiturn_toggle일 경우 history 키워드 + query로 재생성
+                            if use_history_multiturn_toggle:
+                                if st.session_state.history_word is not []:
+                                    # history_word가 리스트라면, 문자열로 합치기
+                                    keywords_str = ", ".join(st.session_state.history_word)
+                                    # 키워드들을 쿼리에 추가
+                                    current_question_for_pipeline = f"{question_input} (관련 키워드: {keywords_str})"
+                                else:
+                                    current_question_for_pipeline = question_input
 
 
 
@@ -657,7 +670,7 @@ if vectorstore:
                             if use_history_multiturn_toggle and eval_response_item and "오류:" not in eval_response_item and eval_item["name"] != ["unrelate"]:
                                 st.write(f" history 생성 중... ")
                                 #평가셋의 ground truth로 생성.
-                                st.session_state.history = summarize_conversation(st.session_state.history, eval_question_text, eval_ground_truth_text)
+                                st.session_state.history, st.session_state.history_word = summarize_conversation(st.session_state.history, eval_question_text, eval_ground_truth_text)
                         
                         progress_text.text(f"진행률: {runs_completed_count}/{total_runs_for_set} - 조합 완료: Emb: {emb_alias_set}, Rerank: {reranker_display_name_set}")
 

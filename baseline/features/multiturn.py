@@ -91,16 +91,25 @@ def query_reformulation(query_db: list[str], current_question: str, turn_num: in
     
 
 ###사람 질문과 AI 응답, 현재 history를 받아서 새로운 history를 생성하는 함수
-def summarize_conversation(current_history: str, current_question : str, crruent_AI_responese : str) -> str :
+from typing import Tuple
+
+def summarize_conversation(
+    current_history: str,
+    current_question: str,
+    current_AI_response: str
+) -> Tuple[str, list]:
     if not OPENAI_API_KEY:
         st.error("멀티턴 질문 재구성을 위해서는 OpenAI API 키가 필요합니다.")
-        return current_history
+        return current_history, []
     
     # 프롬프트 구성
     prompt_text = f"""
 당신은 대화 요약 및 히스토리 관리 전문가입니다.
-다음 정보를 바탕으로, 불필요한 부분은 제거하고 핵심만 간결하게 정리하여 새로운 히스토리 문자열을 생성하세요.
+다음 정보를 바탕으로:
+1. 불필요한 부분은 제거하고 핵심만 간결하게 정리하여 **새로운 히스토리**를 생성하세요.
+2. 요약된 히스토리를 대표하는 **주요 키워드 5개**를 추출하세요.
 
+### 입력 정보
 이전 히스토리:
 {current_history}
 
@@ -108,37 +117,63 @@ def summarize_conversation(current_history: str, current_question : str, crruent
 {current_question}
 
 AI의 응답:
-{crruent_AI_responese}
+{current_AI_response}
 
-# 지침
-- 대화 흐름을 이어갈 수 있도록 중요한 키워드,의도,결과만 포함하세요.
-- 단계별 번호나 불릿이 아니라, 자연스러운 문장 형태의 흐름 요약을 출력합니다.
-- 길이는 원래 히스토리보다 짧게 유지하되, 문맥이 끊기지 않게 작성하세요.
-
+### 출력 형식 (아래 포맷을 반드시 따르세요)
 새로운 히스토리:
+(요약된 히스토리)
+
+대표 키워드:
+- (키워드1)
+- (키워드2)
+- (키워드3)
+- (키워드4)
+- (키워드5)
+
+### 요약 지침
+- 대화 흐름을 이어갈 수 있도록 **중요한 키워드**, **의도**, **결과**만 포함하세요.
+- **단계별 번호**나 **불릿** 없이, 자연스러운 **문장 형태**로 작성하세요.
+- 히스토리 길이는 원래보다 **짧게 유지**하되, **문맥이 끊기지 않게** 작성하세요.
+
+### 키워드 추출 지침
+- 히스토리의 **핵심 단어 5개**를 선정하세요.
+- **명확하고 구체적인 단어**로, **중복 없이** 추출하세요.
+- **한국어**로 작성하고, **짧게** 표현하세요.
+- 키워드만 추출하고, 추가 설명은 하지 마세요.
 """
 
     llm = ChatOpenAI(
-        model="gpt-3.5-turbo", # 비용...
-        temperature=0, # temperature 0 or 0.1?
+        model="gpt-3.5-turbo",
+        temperature=0,
         openai_api_key=OPENAI_API_KEY,
-        max_tokens=256, # optional
+        max_tokens=512,
         callbacks=CALLBACKS_MULTITURN
     )
 
     try:
         response = llm.invoke([HumanMessage(content=prompt_text)])
-        new_history = response.content.strip()
+        output_text = response.content.strip()
+
+        if "대표 키워드:" not in output_text:
+            st.warning("LLM 응답 포맷이 올바르지 않습니다. 현재 History를 그대로 사용합니다.")
+            return current_history, []
         
-        if not new_history: # LLM이 빈 문자열을 반환한 경우
-            st.warning("History 요약 결과가 비어있습니다. 현재 History를 그대로 사용합니다.")
-            return current_history
-        else :
-            return new_history
+        # 결과 Parsing
+        parts = output_text.split("대표 키워드:")
+        new_history = parts[0].replace("새로운 히스토리:", "").strip()
+        keywords_block = parts[1].strip()
+        keywords = [kw.strip("- ").strip() for kw in keywords_block.splitlines() if kw.strip()]
+
+        if not new_history or not keywords:
+            st.warning("History 요약 또는 키워드 추출 결과가 비어 있습니다. 현재 History를 그대로 사용합니다.")
+            return current_history, []
         
+        return new_history, keywords
+
     except Exception as e:
-        st.error(f"History 요약 중 오류 발생: {e}")
-        return current_history # 오류 시 현재 history 그대로 반환
+        st.error(f"History 요약/키워드 추출 중 오류 발생: {e}")
+        return current_history, []
+
 
     
     
