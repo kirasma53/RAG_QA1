@@ -196,13 +196,15 @@ if vectorstore:
 
         # use_history_multiturn_toggle일 경우 history 키워드 + query로 재생성
         if use_history_multiturn_toggle:
-            if st.session_state.history_word is not []:
-                # history_word가 리스트라면, 문자열로 합치기
+            if st.session_state.history == "":
+                current_question_for_pipeline = question_input
+               
+            else:
+                 # history_word가 리스트라면, 문자열로 합치기
                 keywords_str = ", ".join(st.session_state.history_word)
                 # 키워드들을 쿼리에 추가
-                current_question_for_pipeline = f"{question_input} (관련 키워드: {keywords_str})"
-            else:
-                current_question_for_pipeline = question_input
+                current_question_for_pipeline = f"{question_input} (이전 대화 핵심 단어들은 {keywords_str})"
+                st.info(f"재구성된 검색용 질문 (멀티턴): {current_question_for_pipeline}")
 
 
         cost_flags = []
