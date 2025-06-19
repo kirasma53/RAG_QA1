@@ -2,9 +2,9 @@
 Use python 3.12.*  
   
 How to run :  
-RAG_QA/  
+RAG_QA1/  
 ├── baseline/  
-│   ├── main.app.py  
+│   ├── main_app.py  
 │   ├── etc...  
 │   ├── faiss_db/  
 │   └── features/  
@@ -12,5 +12,6 @@ RAG_QA/
 └── .env <---Put here!!!!   
 
 Move to 'RAG_QA/baseline'  
-Enter 'streamlit run rag_combine.py' in baseline  
+Enter 'streamlit run main_app.py' in baseline  
+
 Check the main_app.py to install the dependencies
