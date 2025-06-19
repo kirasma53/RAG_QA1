@@ -101,6 +101,7 @@ def extract_step3_only(full_response: str) -> str:
     return full_response
 
 #tuple 형태로 document만 넘기도록 바꿈
+#word + semantic hybrid search
 def hybrid_search(query, top_k, faiss_vectorstore):
     all_documents = list(faiss_vectorstore.docstore._dict.values())
     
@@ -138,7 +139,7 @@ def hybrid_search(query, top_k, faiss_vectorstore):
     for doc_content in bm25_doc_scores.keys():
         bm25_score = bm25_doc_scores.get(doc_content, 0.0)
         faiss_score = faiss_doc_scores.get(doc_content, 0.0)
-        hybrid_score = 0.3 * bm25_score + 0.7 * faiss_score
+        hybrid_score = 0.2 * bm25_score + 0.8 * faiss_score
         hybrid_scores[doc_content] = hybrid_score
 
     # --- Hybrid Score 정렬 ---

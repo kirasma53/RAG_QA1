@@ -98,6 +98,10 @@ use_gpt_scoring_toggle = st.sidebar.checkbox(
     f"GPT 자동 평가 ({DEFAULT_GPT_SCORING_MODEL})", value=False,
     help=f"생성된 답변에 대해 {DEFAULT_GPT_SCORING_MODEL}를 사용하여 관련성, 충실도 등을 평가합니다. (OpenAI API 비용 발생)"
 )
+evaluate_multiturn_no_context = st.sidebar.checkbox(
+    f"no_context 시스템에서 multiturn 평가", value=False,
+    help=f"multiturn 질문을 no_context 시스템에서 평가할 때 사용합니다(OpenAI API 비용 발생가능)"
+)
 st.sidebar.markdown("---")
 
 
@@ -514,7 +518,7 @@ if vectorstore:
                         #history initialize
                         st.session_state.history = ""
                         st.session_state.history_word = []
-
+                        st.session_state.question_num = 0
 
 
                         st.subheader(f"조합 평가 중: Embedding: {emb_alias_set}, Reranker: {reranker_display_name_set}")
@@ -525,14 +529,13 @@ if vectorstore:
                         for q_idx, eval_item in enumerate(evaluation_set_data):
                             #현재 평가셋의 속성을 들고 온다
                             eval_question_text = eval_item['question']
+                            question_input = eval_question_text
                             eval_ground_truth_text = eval_item['answer']
 
-                            if use_query_multiturn_toggle or use_history_multiturn_toggle : 
-                                eval_multiturn_index = eval_item['M']
-
+                            if use_query_multiturn_toggle or use_history_multiturn_toggle or evaluate_multiturn_no_context : 
                                 ######### index M의 내용이 바뀌었을 경우 다시 바꾸도록 하는 코드 ###########
                                 ### M 이전게 다른거거나 q_idx가 0이면 리셋하도록 ###
-                                if q_idx == 0 or eval_multiturn_index != prev_M_index:
+                                if st.session_state.question_num%2 == 0 :
                                     #query_multiturn varaible initialize
                                     st.session_state.query_db = []
                                     st.session_state.turn_num = 0
@@ -540,7 +543,7 @@ if vectorstore:
                                     st.session_state.history = ""
                                     st.session_state.history_word = []
 
-                                prev_M_index = eval_multiturn_index
+                                st.session_state.question_num += 1
 
                             run_id_set_item = f"Set_Emb:{emb_alias_set}_Rerank:{reranker_display_name_set}_Q:{q_idx+1}"
                             
@@ -584,15 +587,25 @@ if vectorstore:
                                 st.session_state.turn_num = 1
                                 current_question_for_pipeline = eval_question_text
 
-                            # use_history_multiturn_toggle일 경우 history 키워드 + query로 재생성
-                            if use_history_multiturn_toggle:
-                                if st.session_state.history_word is not []:
+                            # history multiturn 평가를 할 경우 history 키워드 + query로 재생성
+                            if use_history_multiturn_toggle :
+                                if st.session_state.question_num%2 == 0:
                                     # history_word가 리스트라면, 문자열로 합치기
                                     keywords_str = ", ".join(st.session_state.history_word)
                                     # 키워드들을 쿼리에 추가
-                                    current_question_for_pipeline = f"{question_input} (관련 키워드: {keywords_str})"
+                                    if evaluate_multiturn_no_context :
+                                        current_question_for_pipeline = question_input
+                                        st.info(f"검색용 질문 재구성 하지 않음(멀티턴): {current_question_for_pipeline}")
+                                    else :
+                                        current_question_for_pipeline = f"{question_input} (이전 대화 핵심 단어들은 {keywords_str})"
+                                        st.info(f"재구성된 검색용 질문 (멀티턴): {current_question_for_pipeline}")
+                                    
+                                    eval_question_text = f"이전 대화의 내용인 \"{st.session_state.history}\"에 대해 \"{question_input}\"가 현재 질문이다. 응답에 대한 의도 평가 시 이를 고려하여라."
+                                    st.info(f"재구성된 평가용 질문(멀티턴): {eval_question_text}")
                                 else:
                                     current_question_for_pipeline = question_input
+
+                                
 
 
 
@@ -642,7 +655,7 @@ if vectorstore:
 
 
                                     st.session_state.evaluation_details[combination_key_set].append({
-                                        "question": eval_question_text, "ground_truth": eval_ground_truth_text,
+                                        "question": question_input, "ground_truth": eval_ground_truth_text,
                                         "response": eval_response_item, "fact_check_score": avg_fc_score_item,
                                         "f1_score": f1_score_item, "gpt_scores": gpt_scores_item,
                                         "used_docs": eval_docs_used_item
@@ -652,7 +665,7 @@ if vectorstore:
                                 except Exception as e_set_item:
                                     st.error(f"[{run_id_set_item}] 평가 실행 중 오류: {e_set_item}")
                                     st.session_state.evaluation_details[combination_key_set].append({
-                                        "question": eval_question_text, "ground_truth": eval_ground_truth_text,
+                                        "question": question_input, "ground_truth": eval_ground_truth_text,
                                         "response": f"오류 발생: {e_set_item}", "fact_check_score": None,
                                         "f1_score": None, "gpt_scores": {"Error": str(e_set_item)},
                                         "used_docs": []
@@ -670,7 +683,7 @@ if vectorstore:
                             if use_history_multiturn_toggle and eval_response_item and "오류:" not in eval_response_item and eval_item["name"] != ["unrelate"]:
                                 st.write(f" history 생성 중... ")
                                 #평가셋의 ground truth로 생성.
-                                st.session_state.history, st.session_state.history_word = summarize_conversation(st.session_state.history, eval_question_text, eval_ground_truth_text)
+                                st.session_state.history, st.session_state.history_word = summarize_conversation(st.session_state.history, question_input, eval_ground_truth_text)
                         
                         progress_text.text(f"진행률: {runs_completed_count}/{total_runs_for_set} - 조합 완료: Emb: {emb_alias_set}, Rerank: {reranker_display_name_set}")
 
