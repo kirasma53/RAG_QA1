@@ -1,4 +1,7 @@
 # RAG/baseline/main_app.py
+# pip install streamlit python-dotenv langchain langchain-openai langchain-community sentence-transformers faiss-cpu langchain-upstage openai==1.* 
+# Make sure python version is = 3.12.*
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import itertools # 현재는 사용 X
@@ -83,7 +86,7 @@ use_history_multiturn_toggle = st.sidebar.checkbox(
     help = "이전 대화 내용의 요약을 기반으로 현재 질문을 재구성합니다. (OpenAI API 비용 발생가능)"
 )
 use_cot_toggle = st.sidebar.checkbox(
-    "CoT 프롬프트 사용", value=True,
+    "CoT 프롬프트 사용", value=False,
     help="LLM이 단계적으로 생각하여 답변을 생성하도록 유도하는 프롬프트를 사용합니다."
 )
 summarize_before_rerank_toggle = st.sidebar.checkbox(
@@ -194,11 +197,10 @@ if vectorstore:
             current_question_for_pipeline = question_input
 
 
-        # use_history_multiturn_toggle일 경우 history 키워드 + query로 재생성
-        if use_history_multiturn_toggle:
-            if st.session_state.history == "":
+        #use_history_multirun_toggle일 경우  history + query로 재생성
+        if use_history_multiturn_toggle : 
+            if st.session_state.history != "" :
                 current_question_for_pipeline = question_input
-               
             else:
                  # history_word가 리스트라면, 문자열로 합치기
                 keywords_str = ", ".join(st.session_state.history_word)
@@ -320,125 +322,125 @@ if vectorstore:
 
 
     # --- Multi-Model Evaluation Section (평가셋 없는 조합 비교) ---
-    st.sidebar.markdown("---")
-    st.sidebar.header("3. 모델 조합 비교 (단일 질문)")
-    st.sidebar.caption("현재 입력된 질문에 대해 여러 모델 조합의 결과를 비교합니다.")
+    # st.sidebar.markdown("---")
+    # st.sidebar.header("3. 모델 조합 비교 (단일 질문)")
+    # st.sidebar.caption("현재 입력된 질문에 대해 여러 모델 조합의 결과를 비교합니다.")
     
-    eval_embeddings_combo = st.sidebar.multiselect(
-        "비교할 임베딩 모델",
-        options=list(AVAILABLE_EMBEDDINGS.keys()),
-        default=[DEFAULT_EMBEDDING_ALIAS],
-        key="combo_eval_embeddings"
-    )
-    eval_use_reranker_combo = st.sidebar.checkbox(
-        "조합 비교 시 리랭커 사용", value=True, key="combo_eval_use_reranker"
-    )
-    eval_rerankers_combo = []
-    if eval_use_reranker_combo:
-        default_reranker_for_combo = [DEFAULT_RERANKER_METHOD] if DEFAULT_RERANKER_METHOD in AVAILABLE_RERANKERS else AVAILABLE_RERANKERS[:1]
-        eval_rerankers_combo = st.sidebar.multiselect(
-            "비교할 리랭커 모델",
-            options=AVAILABLE_RERANKERS,
-            default=default_reranker_for_combo,
-            key="combo_eval_rerankers"
-        )
+    # eval_embeddings_combo = st.sidebar.multiselect(
+    #     "비교할 임베딩 모델",
+    #     options=list(AVAILABLE_EMBEDDINGS.keys()),
+    #     default=[DEFAULT_EMBEDDING_ALIAS],
+    #     key="combo_eval_embeddings"
+    # )
+    # eval_use_reranker_combo = st.sidebar.checkbox(
+    #     "조합 비교 시 리랭커 사용", value=True, key="combo_eval_use_reranker"
+    # )
+    # eval_rerankers_combo = []
+    # if eval_use_reranker_combo:
+    #     default_reranker_for_combo = [DEFAULT_RERANKER_METHOD] if DEFAULT_RERANKER_METHOD in AVAILABLE_RERANKERS else AVAILABLE_RERANKERS[:1]
+    #     eval_rerankers_combo = st.sidebar.multiselect(
+    #         "비교할 리랭커 모델",
+    #         options=AVAILABLE_RERANKERS,
+    #         default=default_reranker_for_combo,
+    #         key="combo_eval_rerankers"
+    #     )
 
-    if st.sidebar.button("모델 조합 비교 실행", key="combo_eval_run_button") and question_input:
-        st.markdown("---")
-        st.header("모델 조합 비교 결과 (단일 질문)")
+    # if st.sidebar.button("모델 조합 비교 실행", key="combo_eval_run_button") and question_input:
+    #     st.markdown("---")
+    #     st.header("모델 조합 비교 결과 (단일 질문)")
         
-        if not eval_embeddings_combo:
-            st.warning("비교할 임베딩 모델을 하나 이상 선택해주세요.")
-        elif eval_use_reranker_combo and not eval_rerankers_combo:
-            st.warning("리랭커 사용이 선택되었으나, 비교할 리랭커 모델이 선택되지 않았습니다.")
-        else:
-            reranker_list_to_iterate_combo = eval_rerankers_combo if eval_use_reranker_combo else [None]
+    #     if not eval_embeddings_combo:
+    #         st.warning("비교할 임베딩 모델을 하나 이상 선택해주세요.")
+    #     elif eval_use_reranker_combo and not eval_rerankers_combo:
+    #         st.warning("리랭커 사용이 선택되었으나, 비교할 리랭커 모델이 선택되지 않았습니다.")
+    #     else:
+    #         reranker_list_to_iterate_combo = eval_rerankers_combo if eval_use_reranker_combo else [None]
             
-            st.info(f"{len(eval_embeddings_combo)}개 임베딩, {len(reranker_list_to_iterate_combo)}개 리랭커 설정으로 총 {len(eval_embeddings_combo) * len(reranker_list_to_iterate_combo)}회 비교 실행.")
+    #         st.info(f"{len(eval_embeddings_combo)}개 임베딩, {len(reranker_list_to_iterate_combo)}개 리랭커 설정으로 총 {len(eval_embeddings_combo) * len(reranker_list_to_iterate_combo)}회 비교 실행.")
             
-            combo_results_display = []
+    #         combo_results_display = []
 
-            for emb_idx, emb_alias_combo in enumerate(eval_embeddings_combo):
-                st.write(f"임베딩 모델 '{emb_alias_combo}' 로딩 중...")
-                # 조합 비교 시에는 매번 벡터스토어를 로드 (캐싱은 load_vector_store 내부에서 처리)
-                current_vectorstore_combo = load_vector_store(emb_alias_combo)
-                if not current_vectorstore_combo:
-                    st.error(f"'{emb_alias_combo}' 벡터 DB 로드 실패. 이 조합은 건너뜁니다.")
-                    combo_results_display.append({
-                        "Embedding": emb_alias_combo, "Reranker": "N/A", "Response": "벡터 DB 로드 실패",
-                        "Fact Check Score": None, "GPT Score": None, "Used Docs": []
-                    })
-                    continue
+    #         for emb_idx, emb_alias_combo in enumerate(eval_embeddings_combo):
+    #             st.write(f"임베딩 모델 '{emb_alias_combo}' 로딩 중...")
+    #             # 조합 비교 시에는 매번 벡터스토어를 로드 (캐싱은 load_vector_store 내부에서 처리)
+    #             current_vectorstore_combo = load_vector_store(emb_alias_combo)
+    #             if not current_vectorstore_combo:
+    #                 st.error(f"'{emb_alias_combo}' 벡터 DB 로드 실패. 이 조합은 건너뜁니다.")
+    #                 combo_results_display.append({
+    #                     "Embedding": emb_alias_combo, "Reranker": "N/A", "Response": "벡터 DB 로드 실패",
+    #                     "Fact Check Score": None, "GPT Score": None, "Used Docs": []
+    #                 })
+    #                 continue
 
-                for rer_idx, reranker_method_combo in enumerate(reranker_list_to_iterate_combo):
-                    reranker_display_name_combo = '사용 안 함' if not eval_use_reranker_combo or reranker_method_combo is None else reranker_method_combo
-                    run_id_combo = f"Combo_Emb:{emb_alias_combo}_Rerank:{reranker_display_name_combo}"
+    #             for rer_idx, reranker_method_combo in enumerate(reranker_list_to_iterate_combo):
+    #                 reranker_display_name_combo = '사용 안 함' if not eval_use_reranker_combo or reranker_method_combo is None else reranker_method_combo
+    #                 run_id_combo = f"Combo_Emb:{emb_alias_combo}_Rerank:{reranker_display_name_combo}"
                     
-                    st.subheader(f"실행 중: Embedding: {emb_alias_combo}, Reranker: {reranker_display_name_combo}")
+    #                 st.subheader(f"실행 중: Embedding: {emb_alias_combo}, Reranker: {reranker_display_name_combo}")
                     
-                    try:
-                        with st.spinner(f"[{run_id_combo}] RAG 파이프라인 실행 중..."):
-                            combo_response, combo_docs_used = run_rag_pipeline(
-                                question=question_input, # 멀티턴 미적용, 원본 단일 질문 사용
-                                vectorstore=current_vectorstore_combo,
-                                retriever_k=retriever_k_value,
-                                use_reranker=eval_use_reranker_combo, # 조합 비교용 리랭커 사용 여부
-                                reranker_method=reranker_method_combo, # 현재 루프의 리랭커
-                                reranker_top_k=reranker_top_k_value,
-                                summarize_before_rerank=summarize_before_rerank_toggle,
-                                llm_model_name=selected_llm,
-                                use_cot=use_cot_toggle,
-                                run_id=run_id_combo
-                            )
+    #                 try:
+    #                     with st.spinner(f"[{run_id_combo}] RAG 파이프라인 실행 중..."):
+    #                         combo_response, combo_docs_used = run_rag_pipeline(
+    #                             question=question_input, # 멀티턴 미적용, 원본 단일 질문 사용
+    #                             vectorstore=current_vectorstore_combo,
+    #                             retriever_k=retriever_k_value,
+    #                             use_reranker=eval_use_reranker_combo, # 조합 비교용 리랭커 사용 여부
+    #                             reranker_method=reranker_method_combo, # 현재 루프의 리랭커
+    #                             reranker_top_k=reranker_top_k_value,
+    #                             summarize_before_rerank=summarize_before_rerank_toggle,
+    #                             llm_model_name=selected_llm,
+    #                             use_cot=use_cot_toggle,
+    #                             run_id=run_id_combo
+    #                         )
                         
-                        avg_fc_score_combo = None
-                        if use_fact_checker_toggle and combo_docs_used and combo_response and "오류:" not in combo_response:
-                            with st.spinner(f"[{run_id_combo}] Fact Checking 중..."):
-                                sentences_fc_combo = sentence_split(combo_response)
-                                if sentences_fc_combo:
-                                    avg_fc_score_combo, _ = fact_checker(sentences_fc_combo, combo_docs_used)
+    #                     avg_fc_score_combo = None
+    #                     if use_fact_checker_toggle and combo_docs_used and combo_response and "오류:" not in combo_response:
+    #                         with st.spinner(f"[{run_id_combo}] Fact Checking 중..."):
+    #                             sentences_fc_combo = sentence_split(combo_response)
+    #                             if sentences_fc_combo:
+    #                                 avg_fc_score_combo, _ = fact_checker(sentences_fc_combo, combo_docs_used)
 
-                        gpt_scores_combo = None
-                        if use_gpt_scoring_toggle and combo_docs_used and combo_response and "오류:" not in combo_response:
-                            with st.spinner(f"[{run_id_combo}] GPT Scoring 중..."):
-                                context_str_combo = format_docs(combo_docs_used)
-                                mock_gt_combo = st.session_state.get("gt_input_single_run", "Ground truth를 제공하지 않았습니다.")
-                                gpt_scores_combo = get_combined_score(question_input, combo_response, context_str_combo, mock_gt_combo)
+    #                     gpt_scores_combo = None
+    #                     if use_gpt_scoring_toggle and combo_docs_used and combo_response and "오류:" not in combo_response:
+    #                         with st.spinner(f"[{run_id_combo}] GPT Scoring 중..."):
+    #                             context_str_combo = format_docs(combo_docs_used)
+    #                             mock_gt_combo = st.session_state.get("gt_input_single_run", "Ground truth를 제공하지 않았습니다.")
+    #                             gpt_scores_combo = get_combined_score(question_input, combo_response, context_str_combo, mock_gt_combo)
                         
-                        combo_results_display.append({
-                            "Embedding": emb_alias_combo, "Reranker": reranker_display_name_combo,
-                            "Response": combo_response, "Fact Check Score": avg_fc_score_combo,
-                            "GPT Score": gpt_scores_combo, "Used Docs": combo_docs_used
-                        })
-                        st.success(f"[{run_id_combo}] 완료.")
+    #                     combo_results_display.append({
+    #                         "Embedding": emb_alias_combo, "Reranker": reranker_display_name_combo,
+    #                         "Response": combo_response, "Fact Check Score": avg_fc_score_combo,
+    #                         "GPT Score": gpt_scores_combo, "Used Docs": combo_docs_used
+    #                     })
+    #                     st.success(f"[{run_id_combo}] 완료.")
 
-                    except Exception as e_combo:
-                        st.error(f"[{run_id_combo}] 조합 비교 실행 중 오류: {e_combo}")
-                        combo_results_display.append({
-                            "Embedding": emb_alias_combo, "Reranker": reranker_display_name_combo,
-                            "Response": f"오류 발생: {e_combo}", "Fact Check Score": None,
-                            "GPT Score": None, "Used Docs": []
-                        })
+    #                 except Exception as e_combo:
+    #                     st.error(f"[{run_id_combo}] 조합 비교 실행 중 오류: {e_combo}")
+    #                     combo_results_display.append({
+    #                         "Embedding": emb_alias_combo, "Reranker": reranker_display_name_combo,
+    #                         "Response": f"오류 발생: {e_combo}", "Fact Check Score": None,
+    #                         "GPT Score": None, "Used Docs": []
+    #                     })
             
-            st.markdown("---")
-            st.subheader("종합 비교 결과 요약")
-            for i, result_item in enumerate(combo_results_display):
-                st.markdown(f"**{i+1}. Embedding: {result_item['Embedding']}, Reranker: {result_item['Reranker']}**")
-                st.markdown(f"**응답:**")
-                st.write(result_item['Response'])
-                if result_item['Fact Check Score'] is not None:
-                    st.caption(f"Fact Check Score: {result_item['Fact Check Score']:.4f}")
-                if result_item['GPT Score'] is not None:
-                    st.caption(f"GPT 자동 평가 점수:")
-                    st.json(result_item['GPT Score'])
-                with st.expander(f"사용한 문서 ({len(result_item['Used Docs'])}개)", key=f"combo_docs_expander_{i}"):
-                    if result_item['Used Docs']:
-                        for doc_idx, doc_obj in enumerate(result_item['Used Docs']):
-                            st.markdown(f"**문서 {doc_idx+1}**: *출처: {doc_obj.metadata.get('file_name', 'N/A')} (인덱스: {doc_obj.metadata.get('index', 'N/A')})*")
-                            st.text_area(f"문서 {doc_idx+1} 내용", doc_obj.page_content, height=100, key=f"combo_doc_text_{i}_{doc_idx}")
-                    else:
-                        st.write("사용된 문서가 없습니다.")
-                st.markdown("---")
+    #         st.markdown("---")
+    #         st.subheader("종합 비교 결과 요약")
+    #         for i, result_item in enumerate(combo_results_display):
+    #             st.markdown(f"**{i+1}. Embedding: {result_item['Embedding']}, Reranker: {result_item['Reranker']}**")
+    #             st.markdown(f"**응답:**")
+    #             st.write(result_item['Response'])
+    #             if result_item['Fact Check Score'] is not None:
+    #                 st.caption(f"Fact Check Score: {result_item['Fact Check Score']:.4f}")
+    #             if result_item['GPT Score'] is not None:
+    #                 st.caption(f"GPT 자동 평가 점수:")
+    #                 st.json(result_item['GPT Score'])
+    #             with st.expander(f"사용한 문서 ({len(result_item['Used Docs'])}개)", key=f"combo_docs_expander_{i}"):
+    #                 if result_item['Used Docs']:
+    #                     for doc_idx, doc_obj in enumerate(result_item['Used Docs']):
+    #                         st.markdown(f"**문서 {doc_idx+1}**: *출처: {doc_obj.metadata.get('file_name', 'N/A')} (인덱스: {doc_obj.metadata.get('index', 'N/A')})*")
+    #                         st.text_area(f"문서 {doc_idx+1} 내용", doc_obj.page_content, height=100, key=f"combo_doc_text_{i}_{doc_idx}")
+    #                 else:
+    #                     st.write("사용된 문서가 없습니다.")
+    #             st.markdown("---")
 
 
     # --- Evaluation Set Handling (평가셋 사용한 모델 조합 평가) ---
@@ -742,39 +744,39 @@ if vectorstore:
                     st.write("상세 결과가 없습니다.")
                 else:
                     for (emb_k_detail, rer_k_detail), details_list_for_combo in st.session_state.evaluation_details.items():
-                        expander_label = f"Embedding: {emb_k_detail}, Reranker: {rer_k_detail} (총 {len(details_list_for_combo)}개 질문)"
-                        with st.expander(expander_label):
-                            if not details_list_for_combo:
-                                st.write("이 조합에 대한 결과가 없습니다.")
-                                continue
-                            for item_idx, detail_item in enumerate(details_list_for_combo):
-                                st.markdown(f"**질문 {item_idx+1}:** {detail_item['question']}")
-                                st.markdown(f"**정답 (Ground Truth):** {detail_item['ground_truth']}")
-                                st.markdown(f"**AI 응답:**")
-                                st.write(detail_item['response'])
-                                if detail_item.get('fact_check_score') is not None:
-                                    st.caption(f"Fact Check Score: {detail_item['fact_check_score']:.4f}")
-                                if detail_item.get('f1_score') is not None:
-                                    st.caption(f"F1 Score (Doc Retrieval): {detail_item['f1_score']:.4f}")
-                                if detail_item.get('gpt_scores') is not None:
-                                    if "Error" in detail_item['gpt_scores']:
-                                        st.error(f"GPT Score Error: {detail_item['gpt_scores']['Error']}")
-                                    else:
-                                        st.caption("GPT 자동 평가 점수:")
-                                        st.json(detail_item['gpt_scores'])
-                                
-                                used_docs_detail = detail_item.get('used_docs', [])
-                                if used_docs_detail:
-                                    with st.popover(f"참고 문서 보기 ({len(used_docs_detail)}개)", use_container_width=True):
-                                        for doc_j, doc_obj_detail in enumerate(used_docs_detail):
-                                            st.markdown(f"**문서 {doc_j+1}**: *출처: {doc_obj_detail.metadata.get('file_name', 'N/A')} (인덱스: {doc_obj_detail.metadata.get('index', 'N/A')})*")
-                                            st.text_area(
-                                                label=f"문서 {doc_j+1} 내용", value=doc_obj_detail.page_content, height=100,
-                                                key=f"detail_doc_content_{emb_k_detail}_{rer_k_detail}_{item_idx}_{doc_j}"
-                                            )
+                        # expander_label = f"Embedding: {emb_k_detail}, Reranker: {rer_k_detail} (총 {len(details_list_for_combo)}개 질문)"
+                        # with st.expander(expander_label):
+                        if not details_list_for_combo:
+                            st.write("이 조합에 대한 결과가 없습니다.")
+                            continue
+                        for item_idx, detail_item in enumerate(details_list_for_combo):
+                            st.markdown(f"**질문 {item_idx+1}:** {detail_item['question']}")
+                            st.markdown(f"**정답 (Ground Truth):** {detail_item['ground_truth']}")
+                            st.markdown(f"**AI 응답:**")
+                            st.write(detail_item['response'])
+                            if detail_item.get('fact_check_score') is not None:
+                                st.caption(f"Fact Check Score: {detail_item['fact_check_score']:.4f}")
+                            if detail_item.get('f1_score') is not None:
+                                st.caption(f"F1 Score (Doc Retrieval): {detail_item['f1_score']:.4f}")
+                            if detail_item.get('gpt_scores') is not None:
+                                if "Error" in detail_item['gpt_scores']:
+                                    st.error(f"GPT Score Error: {detail_item['gpt_scores']['Error']}")
                                 else:
-                                    st.caption("참고한 문서 없음")
-                                st.markdown("---") # 각 질문 항목 구분
+                                    st.caption("GPT 자동 평가 점수:")
+                                    st.json(detail_item['gpt_scores'])
+                            
+                            used_docs_detail = detail_item.get('used_docs', [])
+                            if used_docs_detail:
+                                with st.expander(f"참고 문서 보기 ({len(used_docs_detail)}개)", expanded=False):
+                                    for doc_j, doc_obj_detail in enumerate(used_docs_detail):
+                                        st.markdown(f"**문서 {doc_j+1}**: *출처: {doc_obj_detail.metadata.get('file_name', 'N/A')} (인덱스: {doc_obj_detail.metadata.get('index', 'N/A')})*")
+                                        st.text_area(
+                                            label=f"문서 {doc_j+1} 내용", value=doc_obj_detail.page_content, height=100,
+                                            key=f"detail_doc_content_{emb_k_detail}_{rer_k_detail}_{item_idx}_{doc_j}"
+                                        )
+                            else:
+                                st.caption("참고한 문서 없음")
+                            st.markdown("---") # 각 질문 항목 구분
 
 
     # 이전 평가 결과 표시 로직 (세션 상태에 결과가 남아있는 경우)

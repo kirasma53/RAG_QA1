@@ -13,3 +13,4 @@ RAG_QA/
 
 Move to 'RAG_QA/baseline'  
 Enter 'streamlit run rag_combine.py' in baseline  
+Check the main_app.py to install the dependencies
