@@ -34,6 +34,9 @@ from langchain_core.messages import SystemMessage, RemoveMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
 
+# --- Import BM25 function ---
+from rank_bm25 import BM25Okapi
+
 @st.cache_resource(show_spinner="벡터 DB 로딩 중...")  
 
 def load_vector_store(faiss_alias: str) -> Optional[FAISS]:
@@ -97,7 +100,62 @@ def extract_step3_only(full_response: str) -> str:
         return match.group(1).strip()
     return full_response
 
+#tuple 형태로 document만 넘기도록 바꿈
+#word + semantic hybrid search
+def hybrid_search(query, top_k, faiss_vectorstore):
+    all_documents = list(faiss_vectorstore.docstore._dict.values())
+    
+    # BM25를 위해 토크나이즈
+    bm25_corpus = [doc.page_content.split() for doc in all_documents]
+    bm25_model = BM25Okapi(bm25_corpus)
+    
+    # Document 인덱스 매핑
+    doc_index_to_doc = {idx: doc for idx, doc in enumerate(all_documents)}
 
+    # --- Semantic Search ---
+    faiss_results = faiss_vectorstore.similarity_search_with_score(query, k=top_k * 3)
+    
+    faiss_doc_scores = {doc.page_content: score for doc, score in faiss_results}
+
+    # --- Keyword Search (BM25) ---
+    query_tokens = query.split()
+    bm25_scores = bm25_model.get_scores(query_tokens)
+
+    # Normalize BM25 Scores (min-max scaling)
+    bm25_min = np.min(bm25_scores)
+    bm25_max = np.max(bm25_scores)
+    if bm25_max - bm25_min > 0:
+        bm25_scores_norm = (bm25_scores - bm25_min) / (bm25_max - bm25_min)
+    else:
+        bm25_scores_norm = bm25_scores
+
+    bm25_doc_scores = {
+        doc_index_to_doc[idx].page_content: bm25_scores_norm[idx]
+        for idx in range(len(bm25_scores_norm))
+    }
+
+    # --- Hybrid Score 계산 ---
+    hybrid_scores = {}
+    for doc_content in bm25_doc_scores.keys():
+        bm25_score = bm25_doc_scores.get(doc_content, 0.0)
+        faiss_score = faiss_doc_scores.get(doc_content, 0.0)
+        hybrid_score = 0.2 * bm25_score + 0.8 * faiss_score
+        hybrid_scores[doc_content] = hybrid_score
+
+    # --- Hybrid Score 정렬 ---
+    ranked_docs = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)
+
+    # 최종 top_k 개 문서 반환
+    final_docs = []
+    for doc_content, score in ranked_docs[:top_k]:
+        for doc in all_documents:
+            if doc.page_content == doc_content:
+                final_docs.append(doc)  # ✅ 오직 Document만 추가
+                break
+
+    return final_docs
+
+# update bm25 + semantic
 def run_rag_pipeline(
     question: str,
     vectorstore: FAISS,
@@ -115,15 +173,18 @@ def run_rag_pipeline(
     log_prefix = f"[{run_id}] " if run_id else ""
     st.write(f"{log_prefix}RAG 파이프라인 시작: 질문='{question[:50]}...'")
 
+
+    
     # 1. Retrieve
     st.write(f"{log_prefix}1. 관련 문서 검색 중 (Retriever k={retriever_k})...")
-    retriever = vectorstore.as_retriever(search_kwargs={"k": retriever_k})
     try:
-        initial_docs = retriever.invoke(question, config={"callbacks": CALLBACKS_RAG_CORE})
-        st.write(f"{log_prefix}   초기 검색된 문서 {len(initial_docs)}개")
+        initial_docs = hybrid_search(question, 4, vectorstore)
+        st.write(f"{log_prefix}   검색된 문서 {len(initial_docs)}개")
     except Exception as e:
         st.error(f"{log_prefix}문서 검색 중 오류: {e}")
         return "오류: 문서를 검색하는 중 문제가 발생했습니다.", []
+
+    
 
     # 초기 검색 문서가 없는 경우 처리
     if not initial_docs:
@@ -155,6 +216,8 @@ def run_rag_pipeline(
         st.warning(f"{log_prefix}답변 생성에 사용할 최종 문서를 얻지 못했지만, 컨텍스트 없이 LLM에 질문합니다.")
     elif not final_docs_for_llm and not initial_docs: # 처음부터 문서가 없었던 경우
         st.warning(f"{log_prefix}답변 생성에 사용할 문서가 없습니다. 컨텍스트 없이 LLM에 질문합니다.")
+
+
 
 
     # 3. Generate (LLM 호출)
@@ -353,3 +416,6 @@ def compute_evalset_f1(
     # sklearn.metrics.f1_score 사용
     # zero_division=0: TP, FP, FN 모두 0일 경우 F1을 0으로 처리
     return f1_score(y_true, y_pred, zero_division=0)
+
+
+
