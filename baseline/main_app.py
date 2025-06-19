@@ -210,7 +210,7 @@ if vectorstore:
             keywords_str = ", ".join(st.session_state.history_word)
             # 현재 파이프라인에 전달될 질문(current_question_for_pipeline)에 키워드를 추가
             current_question_for_pipeline = f"{current_question_for_pipeline} (이전 대화 핵심 단어들은 {keywords_str})"
-            st.info(f"재구성된 검색용 질문 (History 키워드 추가): {current_question_for_pipeline}")
+            st.info(f"재구성된 검색용 질문 : {current_question_for_pipeline}")
 
         cost_flags = []
         if selected_embedding_alias == 'openai': cost_flags.append("OpenAI Embedding")

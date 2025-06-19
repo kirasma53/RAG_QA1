@@ -11,7 +11,7 @@ RAG_QA1/
 │       └── etc...  
 └── .env <---Put here!!!!   
 
-Move to 'RAG_QA/baseline'  
+Move dir to 'RAG_QA/baseline'  
 Enter 'streamlit run main_app.py' in baseline  
 
 Check the main_app.py to install the dependencies
