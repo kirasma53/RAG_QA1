@@ -11,6 +11,12 @@ RAG_QA1/
 │       └── etc...  
 └── .env <---Put here!!!!   
 
+.env  
+----  
+OPENAI_API_KEY=  
+UPSTAGE_API_KEY=  
+----
+
 Move dir to 'RAG_QA/baseline'  
 Enter 'streamlit run main_app.py' in baseline  
 
